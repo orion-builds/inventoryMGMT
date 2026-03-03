@@ -1,85 +1,74 @@
 import sqlite3
-from datetime import datetime, timedelta
-import random
 
-def seed():
-    conn = sqlite3.connect("inventory.db")
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;")
+conn = sqlite3.connect("inventory.db") # connect to DB
+cursor = conn.cursor() # cursor to do SQL queriess
 
-    # 1. Clear existing data in dependency order
-    tables = ["INVENTORY_EVENT", "ROLE_HISTORY", "ROLE", "PRODUCT", "CATEGORY"]
-    for table in tables:
-        cursor.execute(f"DELETE FROM {table}")
+cursor.execute("PRAGMA foreign_keys = ON;") # enforce FKs in SQLite
+# RESTRICT by default in SQLite.
 
-    # 2. Setup Category
-    cursor.execute("INSERT INTO CATEGORY (name) VALUES ('Skincare')")
-    skin_cat = cursor.lastrowid
+# 3. Use executescript() to run multiple SQL commands in our strict dependency order
+cursor.executescript("""
+    -- 1. Create CATEGORY
+    CREATE TABLE IF NOT EXISTS CATEGORY (
+        category_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
+    );
 
-    now = datetime.now()
+    -- 2. Create PRODUCT
+    CREATE TABLE IF NOT EXISTS PRODUCT (
+        product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        brand TEXT NOT NULL,
+        name TEXT NOT NULL,
+        amount REAL NOT NULL,
+        unit_of_measure TEXT NOT NULL
+    );
 
-    # 3. Realistic Skincare Test Data
-    # (Brand, Name, Role, Buffer, BasePrice, PriceVar, ConsumDays)
-    products_to_seed = [
-        ('NATURIE', 'Hatomugi Skin Milk', 'Face Moisturiser', 7, 12.50, 3.00, 45),
-        ('LRP', 'Cicaplast Baume B5+', 'Barrier Cream', 14, 22.00, 5.00, 25),
-        ('MENARINI', 'Tretinoin Gel', 'Retinoid', 7, 35.00, 8.00, 75),
-        ('COSRX', 'Low pH Cleanser', 'Cleanser', 7, 11.00, 2.50, 40)
-    ]
+    -- 3. Create ROLE
+    CREATE TABLE IF NOT EXISTS ROLE (
+        role_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        target_buffer_days INTEGER NOT NULL,
+        category_id INTEGER NOT NULL,
+        FOREIGN KEY (category_id) REFERENCES CATEGORY(category_id)
+    );
 
-    for brand, p_name, r_name, buffer, base_price, var, consume_days in products_to_seed:
-        # Create Product
-        cursor.execute("""
-            INSERT INTO PRODUCT (brand, name, amount, unit_of_measure) 
-            VALUES (?, ?, 100, 'ml')
-        """, (brand, p_name))
-        p_id = cursor.lastrowid
+    -- 4. Create ROLE_HISTORY (Composite Primary Key)
+    CREATE TABLE IF NOT EXISTS ROLE_HISTORY (
+        role_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        start_date DATETIME NOT NULL,
+        end_date DATETIME,
+        PRIMARY KEY (role_id, product_id, start_date),
+        FOREIGN KEY (role_id) REFERENCES ROLE(role_id),
+        FOREIGN KEY (product_id) REFERENCES PRODUCT(product_id)
+    );
 
-        # FIX: Corrected column/value count (3 columns, 3 placeholders)
-        cursor.execute("""
-            INSERT INTO ROLE (name, target_buffer_days, category_id) 
-            VALUES (?, ?, ?)
-        """, (r_name, buffer, skin_cat))
-        r_id = cursor.lastrowid
-        
-        # Create History Era (Starts 14 months ago)
-        start_date = now - timedelta(days=420)
-        cursor.execute("""
-            INSERT INTO ROLE_HISTORY (role_id, product_id, start_date) 
-            VALUES (?, ?, ?)
-        """, (r_id, p_id, start_date.strftime('%Y-%m-%d')))
+    -- 5. Create INVENTORY_EVENT (Composite Primary Key)
+    CREATE TABLE IF NOT EXISTS INVENTORY_EVENT (
+        product_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        event_date DATETIME NOT NULL,
+        cost_sgd REAL,
+        quantity INTEGER NOT NULL,
+        PRIMARY KEY (product_id, event_type, event_date),
+        FOREIGN KEY (product_id) REFERENCES PRODUCT(product_id)
+    );
+    -- 1. Global Settings Table
+    CREATE TABLE IF NOT EXISTS SETTINGS (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO SETTINGS (key, value) VALUES ('global_ema_alpha', '0.3');
 
-        current_date = start_date
-        stock = 0
+    -- 2. Add override columns to existing tables
+    ALTER TABLE CATEGORY ADD COLUMN ema_alpha REAL;
+    ALTER TABLE ROLE ADD COLUMN ema_alpha REAL;
+""")
 
-        # 4. Realistic Event Simulation
-        while current_date < now:
-            # Logic for Restock
-            if stock <= 1 or random.random() < 0.04:
-                buy_qty = random.choice([1, 2])
-                total_cost = (base_price + random.uniform(-var, var)) * buy_qty
-                
-                # Match schema order: product_id, event_type, event_date, cost_sgd, quantity
-                cursor.execute("""
-                    INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, cost_sgd, quantity) 
-                    VALUES (?, 'Restock (+)', ?, ?, ?)
-                """, (p_id, 'Restock (+)', current_date.strftime('%Y-%m-%d'), round(total_cost, 2), buy_qty))
-                stock += buy_qty
-                
-            # Logic for Consumption
-            usage_variance = random.randint(-5, 5)
-            current_date += timedelta(days=consume_days + usage_variance)
-            
-            if current_date < now and stock > 0:
-                cursor.execute("""
-                    INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, quantity) 
-                    VALUES (?, 'Finished (-)', ?, 1)
-                """, (p_id, 'Finished (-)', current_date.strftime('%Y-%m-%d'), 1))
-                stock -= 1
 
-    conn.commit()
-    conn.close()
-    print("Database successfully seeded with realistic history and price fluctuations.")
 
-if __name__ == "__main__":
-    seed()
+# 4. Save and close
+conn.commit()
+conn.close()
+
+print("Full relational schema successfully initialized!")

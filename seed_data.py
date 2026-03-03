@@ -1,86 +1,98 @@
 import sqlite3
-from datetime import datetime, timedelta
-import random
+from datetime import datetime
 
-def seed():
+def seed_db():
     conn = sqlite3.connect("inventory.db")
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON;")
 
-    # 1. Clear existing data in dependency order
-    tables = ["INVENTORY_EVENT", "ROLE_HISTORY", "ROLE", "PRODUCT", "CATEGORY"]
+    # 1. UPGRADE SCHEMA: Ensure learning columns exist [cite: 2026-03-03]
+    try:
+        cursor.execute("ALTER TABLE INVENTORY_EVENT ADD COLUMN role_id INTEGER")
+        cursor.execute("ALTER TABLE INVENTORY_EVENT ADD COLUMN unit_cost REAL")
+        cursor.execute("ALTER TABLE INVENTORY_EVENT ADD COLUMN stock_before_event REAL")
+        cursor.execute("ALTER TABLE ROLE ADD COLUMN learned_h REAL")
+        print("Schema upgraded with learning columns.")
+    except sqlite3.OperationalError:
+        print("Schema already contains learning columns.")
+
+    # 2. Clear existing data in dependency order [cite: 2025-12-28]
+    tables = ["INVENTORY_EVENT", "ROLE_HISTORY", "ROLE", "PRODUCT", "CATEGORY", "SETTINGS"]
     for table in tables:
-        cursor.execute(f"DELETE FROM {table}")
+        try:
+            cursor.execute(f"DELETE FROM {table}")
+        except sqlite3.OperationalError:
+            pass
+    
+    # 3. Seed Settings [cite: 2026-03-03]
+    cursor.execute("INSERT INTO SETTINGS (key, value) VALUES ('global_ema_alpha', '0.3')")
+    cursor.execute("INSERT INTO SETTINGS (key, value) VALUES ('default_holding_penalty', '0.015')")
 
-    # 2. Setup Category
-    cursor.execute("INSERT INTO CATEGORY (name) VALUES ('Skincare')")
-    skin_cat = cursor.lastrowid
-
-    now = datetime.now()
-
-    # 3. Realistic Skincare Test Data
-    # (Brand, Name, Role, Buffer, BasePrice, PriceVar, ConsumDays)
-    products_to_seed = [
-        ('NATURIE', 'Hatomugi Skin Milk', 'Face Moisturiser', 7, 12.50, 3.00, 45),
-        ('LRP', 'Cicaplast Baume B5+', 'Barrier Cream', 14, 22.00, 5.00, 25),
-        ('MENARINI', 'Tretinoin Gel', 'Retinoid', 7, 35.00, 8.00, 75),
-        ('COSRX', 'Low pH Cleanser', 'Cleanser', 7, 11.00, 2.50, 40)
+    # 4. Seed Category (3 columns: id, name, ema_alpha) [cite: 2026-03-03]
+    categories = [
+        (1, 'Skincare', 0.25),
+        (2, 'Supplements', 0.40),
+        (3, 'Household', None)
     ]
+    cursor.executemany("INSERT INTO CATEGORY VALUES (?, ?, ?)", categories)
+    
+    # 5. Seed Product (5 columns: id, brand, name, amount, unit) [cite: 2026-03-03]
+    products = [
+        (1, 'LRP', 'Cicaplast Baume B5+', 40, 'ml'),
+        (2, 'COSRX', 'Low pH Cleanser', 150, 'ml'),
+        (3, 'NATURIE', 'Hatomugi Skin Milk', 230, 'ml'),
+        (4, 'MyProtein', 'Impact Whey (Chocolate)', 1, 'kg'),
+        (5, 'Now Foods', 'Magnesium Glycinate', 180, 'caps'),
+        (6, 'Muji', 'Cotton Pads', 180, 'pcs')
+    ]
+    cursor.executemany("INSERT INTO PRODUCT VALUES (?, ?, ?, ?, ?)", products)
 
-    for brand, p_name, r_name, buffer, base_price, var, consume_days in products_to_seed:
-        # Create Product
-        cursor.execute("""
-            INSERT INTO PRODUCT (brand, name, amount, unit_of_measure) 
-            VALUES (?, ?, 100, 'ml')
-        """, (brand, p_name))
-        p_id = cursor.lastrowid
+    # 6. Seed Role (6 columns: id, name, buffer, category_id, ema_alpha, learned_h) [cite: 2026-03-03]
+    roles = [
+        (21, 'Barrier Cream', 7, 1, None, 0.04),   
+        (22, 'Cleanser', 7, 1, None, 0.015),      
+        (23, 'Moisturiser', 14, 1, None, 0.005),  
+        (24, 'Protein Powder', 10, 2, 0.5, 0.02), # Overridden EMA alpha [cite: 2026-03-03]
+        (25, 'Sleep Support', 30, 2, None, 0.01), 
+        (26, 'Daily Cotton', 5, 3, None, 0.002)   
+    ]
+    cursor.executemany("INSERT INTO ROLE VALUES (?, ?, ?, ?, ?, ?)", roles)
 
-        # Create Role
-        cursor.execute("""
-            INSERT INTO ROLE (name, target_buffer_days, category_id) 
-            VALUES (?, ?, ?)
-        """, (r_name, buffer, skin_cat))
-        r_id = cursor.lastrowid
-        
-        # Create History Era (Starts 14 months ago)
-        start_date = now - timedelta(days=420)
-        cursor.execute("""
-            INSERT INTO ROLE_HISTORY (role_id, product_id, start_date) 
-            VALUES (?, ?, ?)
-        """, (r_id, p_id, start_date.strftime('%Y-%m-%d')))
+    # 7. Seed Role History
+    for i in range(1, 7):
+        cursor.execute("INSERT INTO ROLE_HISTORY VALUES (?, ?, ?, NULL)", (20+i, i, '2026-01-01'))
 
-        current_date = start_date
-        stock = 0
+    # 8. Seed Events with Learning Snapshots [cite: 2026-03-03]
+    events = [
+        # Barrier Cream: URGENT (RED) [cite: 2026-03-03]
+        (1, 21, 'Restock (+)', '2026-01-01', 22.00, 1, 22.00, 0),
+        (1, 21, 'Finished (-)', '2026-02-28', None, 1, 22.00, 1),
 
-        # 4. Realistic Event Simulation
-        while current_date < now:
-            # Logic for Restock
-            if stock <= 1 or random.random() < 0.04:
-                buy_qty = random.choice([1, 2])
-                total_cost = (base_price + random.uniform(-var, var)) * buy_qty
-                
-                # FIX: 4 placeholders for 4 variables
-                cursor.execute("""
-                    INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, cost_sgd, quantity) 
-                    VALUES (?, 'Restock (+)', ?, ?, ?)
-                """, (p_id, current_date.strftime('%Y-%m-%d'), round(total_cost, 2), buy_qty))
-                stock += buy_qty
-                
-            # Logic for Consumption
-            usage_variance = random.randint(-5, 5)
-            current_date += timedelta(days=consume_days + usage_variance)
-            
-            if current_date < now and stock > 0:
-                # Matches schema: product_id, event_type, event_date, cost_sgd (None), quantity
-                cursor.execute("""
-                    INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, cost_sgd, quantity) 
-                    VALUES (?, 'Finished (-)', ?, NULL, 1)
-                """, (p_id, current_date.strftime('%Y-%m-%d')))
-                stock -= 1
+        # Cleanser: WARNING (YELLOW) [cite: 2026-03-03]
+        (2, 22, 'Restock (+)', '2026-01-01', 30.00, 3, 10.00, 0),
+        (2, 22, 'Finished (-)', '2026-01-20', None, 1, 10.00, 3),
+        (2, 22, 'Finished (-)', '2026-02-25', None, 1, 10.00, 2),
+
+        # Protein: STABLE (GREEN) & HIGH CONFIDENCE [cite: 2026-01-08]
+        (4, 24, 'Restock (+)', '2026-01-01', 80.00, 4, 20.00, 0),
+        (4, 24, 'Finished (-)', '2026-01-15', None, 1, 20.00, 4),
+        (4, 24, 'Finished (-)', '2026-01-30', None, 1, 20.00, 4),
+        (4, 24, 'Finished (-)', '2026-02-14', None, 1, 20.00, 4),
+        (4, 24, 'Finished (-)', '2026-03-01', None, 1, 20.00, 4),
+
+        # Cotton Pads: LEDGER LEARNING (VALUE $H$) [cite: 2026-03-03]
+        (6, 26, 'Restock (+)', '2026-01-01', 10.00, 2, 5.00, 0),
+        (6, 26, 'Restock (+)', '2026-02-15', 20.00, 5, 5.00, 200) # Snapshot 200 days stock [cite: 2026-03-03]
+    ]
+    cursor.executemany("""
+        INSERT INTO INVENTORY_EVENT 
+        (product_id, role_id, event_type, event_date, cost_sgd, quantity, unit_cost, stock_before_event)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, events)
 
     conn.commit()
     conn.close()
-    print("Database successfully seeded with realistic history and price fluctuations.")
+    print("Full context data live. Refresh your app!")
 
 if __name__ == "__main__":
-    seed()
+    seed_db()

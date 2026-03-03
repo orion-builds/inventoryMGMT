@@ -10,7 +10,7 @@ const loading = ref(true)
 const showAddForm = ref(false)
 const showFilters = ref(false)
 const isEditing = ref(false)
-const originalEvent = ref(null) // Stores the immutable snapshot for the UPDATE query
+const originalEvent = ref(null) 
 
 // --- Filter & Sort State ---
 const filterText = ref('')
@@ -19,7 +19,7 @@ const filterEnd = ref('')
 const filterType = ref('all')
 const filterProdId = ref('all')
 const sortKey = ref('event_date') 
-const sortOrder = ref(-1) // Newest events first
+const sortOrder = ref(-1)
 
 // --- Form State ---
 const searchQuery = ref('')
@@ -42,14 +42,24 @@ const fetchData = async () => {
   } catch (error) { console.error("Fetch failed:", error) } finally { loading.value = false }
 }
 
-/**
- * Enhanced Filter & Sort Logic
- * Dynamically calculates unit cost for display and sorting.
- */
+const calculateImpliedH = (e) => {
+  if (!e.unit_cost || !e.stock_before_event || !e.quantity) return null
+  const pPaid = e.cost_sgd / e.quantity
+  const pBase = e.unit_cost
+  const buffer = 7 
+  const excessDays = Math.max(0, e.stock_before_event - buffer)
+  if (excessDays <= 0 || pPaid >= pBase) return null
+  try {
+    const h = 1 - Math.pow((pPaid / pBase), (1 / excessDays))
+    return h * 100 
+  } catch (err) { return null }
+}
+
 const filteredEvents = computed(() => {
   let result = events.value.map(e => ({
     ...e,
-    unit_cost: e.cost_sgd && e.quantity ? e.cost_sgd / e.quantity : 0
+    unit_cost_display: e.cost_sgd && e.quantity ? e.cost_sgd / e.quantity : 0,
+    implied_h: calculateImpliedH(e)
   })).filter(e => {
     const matchesSearch = !filterText.value || 
       `${e.brand} ${e.name}`.toLowerCase().includes(filterText.value.toLowerCase());
@@ -93,7 +103,6 @@ const openCreateModal = () => {
   showAddForm.value = true
 }
 
-// FIX: Creates a non-reactive copy to preserve the original keys
 const openEditModal = (event) => {
   isEditing.value = true
   originalEvent.value = { ...event } 
@@ -106,17 +115,12 @@ const openEditModal = (event) => {
 
 const saveEvent = async () => {
   if (!selectedProduct.value) return alert("Please select a product.")
-  
-  // Logic: Override cost in DB if switching to Finished
   const costValue = type.value.includes('Restock') ? priceSgd.value : null
-  
   const payload = isEditing.value 
     ? { new_event_type: type.value, new_event_date: eventDate.value, quantity: qty.value, cost_sgd: costValue }
     : { product_id: selectedProduct.value.product_id, event_type: type.value, event_date: eventDate.value, quantity: qty.value, cost_sgd: costValue }
 
   let url = 'http://127.0.0.1:8000/events/'
-  
-  // FIX: Ensures characters like "(" and ")" are correctly encoded
   if (isEditing.value) {
     const queryParams = new URLSearchParams({
       product_id: originalEvent.value.product_id,
@@ -132,28 +136,15 @@ const saveEvent = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
-    
-    if (!res.ok) {
-      const result = await res.json()
-      alert(result.detail || "Error saving event.")
-    } else {
-      showAddForm.value = false
-      await fetchData()
-    }
+    if (res.ok) { showAddForm.value = false; await fetchData() }
   } catch (err) { console.error("Save failed:", err) }
 }
 
 const deleteEvent = async (e) => {
   if (!confirm("Delete this log entry?")) return
-  const queryParams = new URLSearchParams({
-    product_id: e.product_id,
-    event_type: e.event_type,
-    event_date: e.event_date
-  })
+  const queryParams = new URLSearchParams({ product_id: e.product_id, event_type: e.event_type, event_date: e.event_date })
   const url = `http://127.0.0.1:8000/events/?${queryParams.toString()}`
-  try {
-    if ((await fetch(url, { method: 'DELETE' })).ok) await fetchData()
-  } catch (err) { console.error("Delete failed:", err) }
+  try { if ((await fetch(url, { method: 'DELETE' })).ok) await fetchData() } catch (err) { console.error("Delete failed:", err) }
 }
 
 onMounted(fetchData)
@@ -162,7 +153,7 @@ onMounted(fetchData)
 <template>
   <div class="events-container">
     <header class="view-header">
-      <h1>Inventory Events</h1>
+      <h1>Inventory Ledger</h1>
       <div class="header-actions">
         <button @click="showFilters = !showFilters" class="btn-filter" :class="{ active: showFilters }">
           🔍 Filter
@@ -200,7 +191,8 @@ onMounted(fetchData)
             <th @click="sortBy('event_type')" class="sortable">Type <span v-if="sortKey === 'event_type'">{{ sortOrder === 1 ? '▲' : '▼' }}</span></th>
             <th @click="sortBy('quantity')" class="sortable">Qty <span v-if="sortKey === 'quantity'">{{ sortOrder === 1 ? '▲' : '▼' }}</span></th>
             <th @click="sortBy('cost_sgd')" class="sortable">Total Cost <span v-if="sortKey === 'cost_sgd'">{{ sortOrder === 1 ? '▲' : '▼' }}</span></th>
-            <th @click="sortBy('unit_cost')" class="sortable">Unit Cost <span v-if="sortKey === 'unit_cost'">{{ sortOrder === 1 ? '▲' : '▼' }}</span></th>
+            <th @click="sortBy('unit_cost_display')" class="sortable">Unit Cost <span v-if="sortKey === 'unit_cost_display'">{{ sortOrder === 1 ? '▲' : '▼' }}</span></th>
+            <th @click="sortBy('implied_h')" class="sortable">Value ($H$) <span v-if="sortKey === 'implied_h'">{{ sortOrder === 1 ? '▲' : '▼' }}</span></th>
             <th class="actions-header"></th>
           </tr>
         </thead>
@@ -211,7 +203,14 @@ onMounted(fetchData)
             <td><span class="badge" :class="e.event_type.includes('Restock') ? 'restocked' : 'finished'">{{ e.event_type }}</span></td>
             <td>{{ e.quantity }}</td>
             <td>{{ e.cost_sgd ? `S$${e.cost_sgd.toFixed(2)}` : '-' }}</td>
-            <td class="unit-cost-cell">{{ e.cost_sgd ? `S$${(e.cost_sgd / e.quantity).toFixed(2)}` : '-' }}</td>
+            <td class="unit-cost-cell">{{ e.cost_sgd ? `S$${e.unit_cost_display.toFixed(2)}` : '-' }}</td>
+            <td class="h-cell">
+              <template v-if="e.implied_h !== null">
+                <span class="h-val">{{ e.implied_h.toFixed(1) }}%</span>
+                <span class="h-label">/day</span>
+              </template>
+              <span v-else class="empty-text">-</span>
+            </td>
             <td class="actions-cell">
               <div class="action-buttons">
                 <button class="btn-edit" @click="openEditModal(e)">Edit</button>
@@ -262,7 +261,6 @@ onMounted(fetchData)
 .view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
 .header-actions { display: flex; gap: 12px; }
 
-/* Filter Drawer Styling */
 .btn-filter { background: transparent; border: 1px solid #444; color: #888; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
 .btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
 
@@ -273,39 +271,40 @@ onMounted(fetchData)
 .filter-input { background: #222; border: 1px solid #444; color: #eee; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; }
 .btn-reset { background: transparent; border: 1px solid #444; color: #666; padding: 8px 16px; border-radius: 6px; cursor: pointer; height: 38px; }
 
-/* Drawer Animation */
-.drawer-enter-active, .drawer-leave-active { transition: all 0.3s ease; max-height: 300px; opacity: 1; }
-.drawer-enter-from, .drawer-leave-to { max-height: 0; opacity: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+/* Snappy Drawer Animation [cite: 2026-03-03] */
+.drawer-enter-active { transition: all 0.2s cubic-bezier(0, 0, 0.2, 1); max-height: 250px; }
+.drawer-leave-active { transition: all 0.15s cubic-bezier(0.4, 0, 1, 1); max-height: 250px; }
+.drawer-enter-from, .drawer-leave-to { opacity: 0; max-height: 0; transform: translateY(-8px) scale(0.98); }
 
 .table-wrapper { background: #111; border-radius: 12px; border: 1px solid #222; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; }
-th { background: #1a1a1a; color: #42b883; text-align: left; padding: 14px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; }
+th { background: #1a1a1a; color: #42b883; text-align: left; padding: 12px 14px; font-size: 0.75rem; text-transform: uppercase; border-bottom: 2px solid #222; transition: 0.2s; }
+th.sortable:hover { background: #222; cursor: pointer; color: #fff; }
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { background: #222; }
 td { padding: 14px; border-bottom: 1px solid #222; }
 .unit-cost-cell { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 
+.h-cell { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+.h-val { color: #f1c40f; font-weight: bold; }
+.h-label { font-size: 0.6rem; color: #555; text-transform: uppercase; font-family: 'Inter', sans-serif; font-weight: 800; margin-left: 2px; }
+.empty-text { color: #333; font-style: normal; }
+
 .badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; }
 .badge.restocked { color: #42b883; background: rgba(66, 184, 131, 0.1); }
 .badge.finished { color: #ff4757; background: rgba(255, 71, 87, 0.1); }
 
-/* Hover Reveal for Buttons */
 .action-buttons { opacity: 0; transition: 0.2s; display: flex; gap: 8px; justify-content: flex-end; }
 .event-row:hover .action-buttons { opacity: 1; }
 .event-row:hover { background: #161616; }
 .btn-edit, .btn-delete { padding: 6px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 .btn-edit { background: transparent; border: 1px solid #444; color: #888; }
 .btn-delete { background: #ff4757; color: #fff; border: none; }
+.btn-toggle { background: #42b883; color: #000; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
 
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; padding: 32px; width: 600px; }
-.form-line { display: flex; gap: 16px; margin-bottom: 24px; align-items: flex-end; }
-.search-container { flex: 2; position: relative; }
-.input-group { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .input-group label { font-size: 0.65rem; color: #666; font-weight: 800; text-transform: uppercase; }
 input, select { background: #222; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 8px; }
 .btn-save { width: 100%; background: #42b883; color: #000; font-weight: 800; padding: 12px; border: none; border-radius: 8px; cursor: pointer; }
-.results-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: #222; border: 1px solid #333; border-radius: 8px; z-index: 100; margin-top: 4px; }
-.result-item { padding: 12px; cursor: pointer; }
-.result-item:hover { background: #333; color: #42b883; }
 </style>

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware # no colour for some reason
 from pydantic import BaseModel # comes with fastapi pip
 from typing import Optional
 import sqlite3
+import math
 
 app = FastAPI()
 
@@ -40,11 +41,19 @@ class InventoryEventCreate(BaseModel):
 
 class CategoryCreate(BaseModel):
     name: str
+    ema_alpha: Optional[float] = None # Ranges from 0.0 to 1.0
 
 class RoleCreate(BaseModel):
     name: str
     target_buffer_days: int
     category_id: int
+    ema_alpha: Optional[float] = None
+
+class RoleUpdate(BaseModel):
+    name: Optional[str] = None
+    target_buffer_days: Optional[int] = None
+    category_id: Optional[int] = None
+    ema_alpha: Optional[float] = None
 
 class RoleHistoryCreate(BaseModel):
     role_id: int
@@ -56,15 +65,6 @@ class RoleHistoryUpdate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
 
-class RoleUpdate(BaseModel):
-    name: Optional[str] = None
-    target_buffer_days: Optional[int] = None
-    category_id: Optional[int] = None
-
-class EventUpdate(BaseModel):
-    quantity: Optional[int] = None
-    cost_sgd: Optional[float] = None
-
 class ProductUpdate(BaseModel):
     brand: Optional[str] = None
     name: Optional[str] = None
@@ -73,8 +73,119 @@ class ProductUpdate(BaseModel):
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = None
+    ema_alpha: Optional[float] = None
 
+class EventUpdate(BaseModel):
+    new_event_type: Optional[str] = None
+    new_event_date: Optional[str] = None
+    quantity: Optional[int] = None
+    cost_sgd: Optional[float] = None
 
+def get_ema_alpha(cursor, role_id, category_id):
+    # 1. Check Role level
+    cursor.execute("SELECT ema_alpha FROM ROLE WHERE role_id = ?", (role_id,))
+    res = cursor.fetchone()
+    if res and res[0] is not None: return res[0]
+
+    # 2. Check Category level
+    cursor.execute("SELECT ema_alpha FROM CATEGORY WHERE category_id = ?", (category_id,))
+    res = cursor.fetchone()
+    if res and res[0] is not None: return res[0]
+
+    # 3. Fallback to Global
+    cursor.execute("SELECT value FROM SETTINGS WHERE key = 'global_ema_alpha'")
+    res = cursor.fetchone()
+    return float(res[0]) if res else 0.3
+
+def get_current_ema_for_product(cursor, product_id, role_id, category_id):
+    # 1. Fetch historical restocks for this product [cite: 2026-03-03]
+    cursor.execute("""
+        SELECT cost_sgd, quantity FROM INVENTORY_EVENT 
+        WHERE product_id = ? AND event_type LIKE 'Restock%'
+        AND cost_sgd IS NOT NULL AND quantity > 0
+        ORDER BY event_date ASC
+    """, (product_id,))
+    restocks = cursor.fetchall()
+    
+    if not restocks:
+        return 0.0
+
+    # 2. Apply the cascade alpha logic [cite: 2026-03-03]
+    alpha = get_ema_alpha(cursor, role_id, category_id)
+    
+    # 3. Calculate EMA [cite: 2026-01-08]
+    unit_prices = [r['cost_sgd'] / r['quantity'] for r in restocks]
+    ema = unit_prices[0]
+    for p in unit_prices[1:]:
+        ema = (p * alpha) + (ema * (1 - alpha))
+    return ema
+
+def update_learned_habit(cursor, role_id):
+    """Back-solves H based on historical 'Early' restocks with dynamic burn rate."""
+    
+    # 1. Fetch Role config and current product context [cite: 2026-03-03]
+    cursor.execute("""
+        SELECT r.target_buffer_days, rh.product_id, rh.start_date 
+        FROM ROLE r
+        LEFT JOIN ROLE_HISTORY rh ON r.role_id = rh.role_id AND rh.end_date IS NULL
+        WHERE r.role_id = ?
+    """, (role_id,))
+    role_info = cursor.fetchone()
+    if not role_info: return
+    
+    buffer = role_info['target_buffer_days'] or 7
+    product_id = role_info['product_id']
+    start_date = role_info['start_date']
+
+    # 2. Calculate the CURRENT burn rate for this role [cite: 2026-03-03]
+    # We use the same 'Finished (-)' logic from your forecast endpoint [cite: 2025-12-28]
+    burn_rate = 1.0 # Default fallback [cite: 2026-03-03]
+    if product_id and start_date:
+        cursor.execute("""
+            SELECT MIN(event_date) as first_use, COUNT(*) as units_finished
+            FROM INVENTORY_EVENT 
+            WHERE product_id = ? AND event_type = 'Finished (-)' AND event_date >= ?
+        """, (product_id, start_date))
+        usage = cursor.fetchone()
+        if usage and usage['units_finished'] >= 1 and usage['first_use']:
+            first_dt = datetime.strptime(usage['first_use'], '%Y-%m-%d')
+            total_days = max(1, (datetime.now() - first_dt).days)
+            burn_rate = usage['units_finished'] / total_days
+
+    # 3. Fetch historical restocks [cite: 2026-03-03]
+    cursor.execute("""
+        SELECT cost_sgd, quantity, unit_cost, stock_before_event
+        FROM INVENTORY_EVENT
+        WHERE role_id = ? AND event_type LIKE 'Restock%' 
+        AND unit_cost > 0 AND stock_before_event IS NOT NULL
+    """, (role_id,))
+    
+    restocks = cursor.fetchall()
+    penalties = []
+
+    for r in restocks:
+        if r['quantity'] <= 0: continue
+        p_paid = r['cost_sgd'] / r['quantity']
+        p_base = r['unit_cost']
+        
+        # 4. Use the burn_rate to find ACTUAL excess days [cite: 2026-03-03]
+        days_on_hand = r['stock_before_event'] / burn_rate
+        excess_days = max(0, days_on_hand - buffer)
+
+        # 5. The Solver [cite: 2026-03-03]
+        if excess_days > 0 and p_paid < p_base:
+            try:
+                # Algebra: H = 1 - (P_paid / P_base)^(1 / excess_days) [cite: 2026-03-03]
+                h = 1 - math.pow((p_paid / p_base), (1 / excess_days))
+                # Bound H between 0.001 and 0.1 to prevent crazy outlier results [cite: 2026-03-03]
+                penalties.append(max(0.001, min(h, 0.1)))
+            except (ValueError, ZeroDivisionError):
+                continue
+
+    if penalties:
+        # Save the mean penalty back to the role [cite: 2026-03-03]
+        learned_h = sum(penalties) / len(penalties)
+        cursor.execute("UPDATE ROLE SET learned_h = ? WHERE role_id = ?", (learned_h, role_id))
 
 @app.get("/dashboard/forecast")
 def get_restock_forecast():
@@ -83,9 +194,14 @@ def get_restock_forecast():
     cursor = conn.cursor()
     
     try:
-        # 1. Get Active Roles
+        # 1. Fetch Global Settings for WTP [cite: 2026-03-03]
+        cursor.execute("SELECT value FROM SETTINGS WHERE key = 'default_holding_penalty'")
+        setting_res = cursor.fetchone()
+        default_h = float(setting_res['value']) if setting_res else 0.015 
+
+        # 2. Get Active Roles [cite: 2025-12-28, 2026-03-03]
         cursor.execute("""
-            SELECT r.role_id, r.name as role_name, r.target_buffer_days,
+            SELECT r.role_id, r.name as role_name, r.target_buffer_days, r.category_id, r.learned_h,
                    p.product_id, p.brand, p.name as product_name, rh.start_date
             FROM ROLE_HISTORY rh
             JOIN ROLE r ON rh.role_id = r.role_id
@@ -95,10 +211,12 @@ def get_restock_forecast():
         active_roles = [dict(row) for row in cursor.fetchall()]
         
         forecasts = []
+        total_daily_burn = 0.0
+
         for role in active_roles:
-            # 2. FILTER BY ERA: Fetch events from current era start to prevent legacy data errors
+            # 3. Fetch events for Stock and EMA [cite: 2026-03-03]
             cursor.execute("""
-                SELECT event_date, event_type, quantity 
+                SELECT event_date, event_type, quantity, cost_sgd 
                 FROM INVENTORY_EVENT 
                 WHERE product_id = ? AND event_date >= ?
                 ORDER BY event_date ASC
@@ -107,16 +225,25 @@ def get_restock_forecast():
 
             history_points = []
             current_stock = 0
+            restock_prices = [] 
+
             for e in events:
                 if "Restock" in e['event_type']: 
                     current_stock += e['quantity']
+                    if e['cost_sgd'] and e['quantity'] > 0:
+                        restock_prices.append(e['cost_sgd'] / e['quantity'])
                 else: 
                     current_stock -= e['quantity']
-                history_points.append({"date": e['event_date'], "stock": current_stock, "event_type": e['event_type']})
+                
+                history_points.append({
+                    "date": e['event_date'], 
+                    "stock": current_stock, 
+                    "event_type": e['event_type']
+                })
 
-            # 3. Consumption Math & Confidence Logic
+            # 4. Usage Math: FIXED for the "One-Log" Edge Case [cite: 2026-03-03]
             cursor.execute("""
-                SELECT MIN(event_date) as first_use, COUNT(*) as units_finished
+                SELECT COUNT(*) as units_finished
                 FROM INVENTORY_EVENT 
                 WHERE product_id = ? AND event_type = 'Finished (-)' AND event_date >= ?
             """, (role['product_id'], role['start_date']))
@@ -125,55 +252,76 @@ def get_restock_forecast():
             valid_stock = max(0, current_stock) 
             units = usage['units_finished'] if usage['units_finished'] else 0
             
-            if units >= 1 and usage['first_use']:
-                # Confidence Ranking based on sample size
-                if units >= 3:
-                    conf = "High"
-                    error_margin = 0.10  # 10% variance
-                elif units == 2:
-                    conf = "Medium"
-                    error_margin = 0.25  # 25% variance
-                else:
-                    conf = "Low"
-                    error_margin = 0.45  # 45% variance
-
-                # Core Forecast Calculation
-                first_dt = datetime.strptime(usage['first_use'], '%Y-%m-%d')
-                total_days = max(1, (datetime.now() - first_dt).days)
-                days_per_unit = total_days / units
-                
-                days_remaining = int(valid_stock * days_per_unit)
+            if units >= 1:
+                # FIX: Determine the earliest anchor point [cite: 2026-03-03]
+                # If we have very little data, use the date you assigned the role [cite: 2026-03-03]
+                first_dt = datetime.strptime(role['start_date'], '%Y-%m-%d')
                 now = datetime.now()
+                total_days = max(1, (now - first_dt).days)
+                
+                # Confidence Ranking based on volume [cite: 2026-03-03]
+                if units >= 3: conf = "High"
+                elif units == 2: conf = "Medium"
+                else: conf = "Low"
+
+                burn_rate = units / total_days 
+                
+                # Apply EMA Cascade [cite: 2026-03-03]
+                alpha = get_ema_alpha(cursor, role['role_id'], role['category_id'])
+                ema_unit_cost = 0.0
+                if restock_prices:
+                    ema_unit_cost = restock_prices[0]
+                    for p in restock_prices[1:]:
+                        ema_unit_cost = (p * alpha) + (ema_unit_cost * (1 - alpha))
+                
+                daily_cost = burn_rate * ema_unit_cost
+                total_daily_burn += daily_cost
+
+                days_remaining = int(valid_stock / burn_rate)
                 expected_dt = now + timedelta(days=days_remaining)
                 
-                # Confidence Interval Boundary Calculations
-                min_runout = now + timedelta(days=int(days_remaining * (1 - error_margin)))
-                max_runout = now + timedelta(days=int(days_remaining * (1 + error_margin)))
+                # --- WTP / TARGET DEAL PRICE LOGIC [cite: 2026-03-03] ---
+                buffer_days = role['target_buffer_days'] or 7
+                h_penalty = role['learned_h'] if role['learned_h'] is not None else default_h
+                excess_days = max(0, days_remaining - buffer_days)
+                
+                if excess_days > 0 and ema_unit_cost > 0:
+                    target_deal = ema_unit_cost * math.pow((1 - h_penalty), excess_days)
+                else:
+                    target_deal = ema_unit_cost 
                 
                 forecasts.append({
                     **role,
                     "days_remaining": days_remaining,
                     "expected_restock": expected_dt.strftime('%Y-%m-%d'),
-                    "min_runout": min_runout.strftime('%Y-%m-%d'),
-                    "max_runout": max_runout.strftime('%Y-%m-%d'),
+                    "daily_cost": round(daily_cost, 2),
                     "confidence": conf,
                     "stock_on_hand": valid_stock,
                     "history": history_points,
-                    "status": "Calculated"
+                    "status": "Calculated",
+                    "target_deal_price": round(target_deal, 2),
+                    "excess_days": excess_days,
+                    "ema_unit_cost": round(ema_unit_cost, 2)
                 })
             else:
-                # Fallback for roles with no usage data yet
+                # If 0 units finished, we stick to the 9999 warning [cite: 2026-03-03]
                 forecasts.append({
-                    **role, 
-                    "days_remaining": 9999, 
-                    "status": "Insufficient Data", 
-                    "confidence": "N/A",
-                    "stock_on_hand": valid_stock, 
-                    "history": history_points
+                    **role, "days_remaining": 9999, "daily_cost": 0.0,
+                    "status": "Insufficient Data", "confidence": "N/A",
+                    "stock_on_hand": valid_stock, "history": history_points,
+                    "target_deal_price": 0.0, "excess_days": 0, "ema_unit_cost": 0.0
                 })
 
         forecasts.sort(key=lambda x: x['days_remaining'])
-        return {"forecast": forecasts}
+        
+        return {
+            "summary": {
+                "daily": round(total_daily_burn, 2),
+                "monthly": round(total_daily_burn * 30.44, 2),
+                "yearly": round(total_daily_burn * 365.25, 2)
+            },
+            "forecast": forecasts
+        }
     finally:
         conn.close()
 
@@ -326,38 +474,57 @@ def get_events():
 @app.post("/events/")
 def log_event(event: InventoryEventCreate):
     conn = sqlite3.connect("inventory.db")
+    conn.row_factory = sqlite3.Row 
     cursor = conn.cursor()
-    
-    # 1. ENFORCE THE RULES: Turn on strict foreign key checking
     cursor.execute("PRAGMA foreign_keys = ON;")
     
     try:
-        # 2. Insert the event into the ledger
+        # 1. Fetch Role and Category context [cite: 2026-03-03]
         cursor.execute("""
-            INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, cost_sgd, quantity)
-            VALUES (?, ?, ?, ?, ?)
-        """, (event.product_id, event.event_type, event.event_date, event.cost_sgd, event.quantity))
+            SELECT r.role_id, r.category_id 
+            FROM ROLE_HISTORY rh
+            JOIN ROLE r ON rh.role_id = r.role_id
+            WHERE rh.product_id = ? AND rh.end_date IS NULL
+        """, (event.product_id,))
+        context = cursor.fetchone()
+        
+        role_id = context['role_id'] if context else None
+        category_id = context['category_id'] if context else None
+
+        # 2. Capture baseline context BEFORE the new event [cite: 2026-03-03]
+        cursor.execute("""
+            SELECT SUM(CASE WHEN event_type LIKE 'Restock%' THEN quantity ELSE -quantity END) as current_stock
+            FROM INVENTORY_EVENT WHERE product_id = ?
+        """, (event.product_id,))
+        stock_before = cursor.fetchone()['current_stock'] or 0
+        
+        # Calculate EMA baseline using existing cascade rules [cite: 2026-03-03]
+        p_base = 0.0
+        if role_id and category_id:
+            p_base = get_current_ema_for_product(cursor, event.product_id, role_id, category_id)
+
+        # 3. Insert the Event with Snapshot [cite: 2026-03-03]
+        cursor.execute("""
+            INSERT INTO INVENTORY_EVENT 
+            (product_id, role_id, event_type, event_date, cost_sgd, quantity, unit_cost, stock_before_event)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (event.product_id, role_id, event.event_type, event.event_date, 
+              event.cost_sgd, event.quantity, p_base, stock_before))
+        
+        # 4. Trigger the Back-Solver Machine Learning [cite: 2026-03-03]
+        if "Restock" in event.event_type and role_id:
+            update_learned_habit(cursor, role_id)
         
         conn.commit()
         
     except sqlite3.IntegrityError as e:
-        # If the product_id doesn't exist, this specific error fires
         raise HTTPException(status_code=400, detail=f"Data integrity error: {str(e)}")
     except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-    return {"message": "Inventory event logged successfully."}
-
-from pydantic import BaseModel
-from typing import Optional
-
-class EventUpdate(BaseModel):
-    new_event_type: Optional[str] = None
-    new_event_date: Optional[str] = None
-    quantity: Optional[int] = None
-    cost_sgd: Optional[float] = None
+    return {"message": "Inventory event logged and habit updated."}
 
 @app.patch("/events/")
 def update_event(product_id: int, event_type: str, event_date: str, event_data: EventUpdate):
@@ -505,10 +672,11 @@ def get_current_stock(product_id: int):
 @app.get("/categories/")
 def get_categories():
     conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row  # Returns dicts instead of tuples
+    conn.row_factory = sqlite3.Row 
     cursor = conn.cursor()
     
     try:
+        # Fetching ema_alpha to support the cascade settings lookup
         cursor.execute("SELECT * FROM CATEGORY")
         categories = [dict(row) for row in cursor.fetchall()]
     except sqlite3.Error as e:
@@ -524,10 +692,11 @@ def create_category(category: CategoryCreate):
     cursor = conn.cursor()
     
     try:
+        # Allowing optional alpha initialization at creation
         cursor.execute("""
-            INSERT INTO CATEGORY (name)
-            VALUES (?)
-        """, (category.name,))
+            INSERT INTO CATEGORY (name, ema_alpha)
+            VALUES (?, ?)
+        """, (category.name, category.ema_alpha))
         
         conn.commit()
         new_id = cursor.lastrowid
@@ -544,11 +713,21 @@ def update_category(category_id: int, category_data: CategoryUpdate):
     conn = sqlite3.connect("inventory.db")
     cursor = conn.cursor()
     try:
-        if category_data.name is None:
-            raise HTTPException(status_code=400, detail="Name field is required")
-            
-        cursor.execute("UPDATE CATEGORY SET name = ? WHERE category_id = ?", 
-                       (category_data.name, category_id))
+        # Logic to update only the fields provided in the request body
+        update_data = category_data.dict(exclude_unset=True)
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields provided for update")
+
+        query = "UPDATE CATEGORY SET "
+        params = []
+        for key, value in update_data.items():
+            query += f"{key} = ?, "
+            params.append(value)
+        
+        query = query.rstrip(", ") + " WHERE category_id = ?"
+        params.append(category_id)
+
+        cursor.execute(query, params)
         
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Category not found")
@@ -564,7 +743,7 @@ def update_category(category_id: int, category_data: CategoryUpdate):
 def delete_category(category_id: int):
     conn = sqlite3.connect("inventory.db")
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;") # Enforce dependency rules
+    cursor.execute("PRAGMA foreign_keys = ON;") 
     
     try:
         cursor.execute("DELETE FROM CATEGORY WHERE category_id = ?", (category_id,))
@@ -573,7 +752,6 @@ def delete_category(category_id: int):
         conn.commit()
         return {"message": "Category deleted successfully"}
     except sqlite3.IntegrityError:
-        # Prevents deleting a category if it's currently linked to a Role
         raise HTTPException(status_code=400, detail="Cannot delete category: It is linked to active Roles.")
     finally:
         conn.close()
@@ -585,7 +763,7 @@ def get_roles():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     try:
-        # Join with Category so the UI is readable
+        # Fetch ema_alpha so the UI can display current overrides
         cursor.execute("""
             SELECT r.*, c.name as category_name 
             FROM ROLE r
@@ -602,21 +780,19 @@ def get_roles():
 def create_role(role: RoleCreate):
     conn = sqlite3.connect("inventory.db")
     cursor = conn.cursor()
-    
-    # ENFORCE THE RULES: Role depends on Category
     cursor.execute("PRAGMA foreign_keys = ON;")
     
     try:
+        # Include ema_alpha in the insertion
         cursor.execute("""
-            INSERT INTO ROLE (name, target_buffer_days, category_id)
-            VALUES (?, ?, ?)
-        """, (role.name, role.target_buffer_days, role.category_id))
+            INSERT INTO ROLE (name, target_buffer_days, category_id, ema_alpha)
+            VALUES (?, ?, ?, ?)
+        """, (role.name, role.target_buffer_days, role.category_id, role.ema_alpha))
         
         conn.commit()
         new_id = cursor.lastrowid
         
     except sqlite3.IntegrityError as e:
-        # Blocks you if you pass a fake category_id
         raise HTTPException(status_code=400, detail=f"Data integrity error: {str(e)}")
     except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -632,10 +808,10 @@ def update_role(role_id: int, role_data: RoleUpdate):
     cursor.execute("PRAGMA foreign_keys = ON;")
     
     try:
-        # Dynamically build the UPDATE query based on what was provided
         update_fields = []
         params = []
         
+        # Use exclude_unset=True logic or check fields individually
         if role_data.name is not None:
             update_fields.append("name = ?")
             params.append(role_data.name)
@@ -645,6 +821,9 @@ def update_role(role_id: int, role_data: RoleUpdate):
         if role_data.category_id is not None:
             update_fields.append("category_id = ?")
             params.append(role_data.category_id)
+        if role_data.ema_alpha is not None: # New field logic
+            update_fields.append("ema_alpha = ?")
+            params.append(role_data.ema_alpha)
             
         if not update_fields:
             raise HTTPException(status_code=400, detail="No fields provided for update")
@@ -775,3 +954,26 @@ def delete_role_history(role_id: int, product_id: int, start_date: str):
         return {"message": "Assignment deleted."}
     finally:
         conn.close()
+
+@app.get("/settings/")
+def get_settings():
+    conn = sqlite3.connect("inventory.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM SETTINGS")
+    # Convert list of rows to a simple key-value dictionary
+    settings = {row['key']: row['value'] for row in cursor.fetchall()}
+    conn.close()
+    return settings
+
+@app.patch("/settings/{key}")
+def update_setting(key: str, value: str):
+    conn = sqlite3.connect("inventory.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE SETTINGS SET value = ? WHERE key = ?", (value, key))
+    if cursor.rowcount == 0:
+        # If the key doesn't exist yet, insert it [cite: 2026-03-03]
+        cursor.execute("INSERT INTO SETTINGS (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+    return {"message": f"Setting '{key}' updated successfully"}
