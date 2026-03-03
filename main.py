@@ -96,7 +96,7 @@ def get_restock_forecast():
         
         forecasts = []
         for role in active_roles:
-            # 2. FILTER BY ERA START DATE: Prevents negative 'Legacy Debt'
+            # 2. FILTER BY ERA: Fetch events from current era start to prevent legacy data errors
             cursor.execute("""
                 SELECT event_date, event_type, quantity 
                 FROM INVENTORY_EVENT 
@@ -108,12 +108,13 @@ def get_restock_forecast():
             history_points = []
             current_stock = 0
             for e in events:
-                if "Restock" in e['event_type']: current_stock += e['quantity']
-                else: current_stock -= e['quantity']
-                # Clamp to 0 if you want to hide data errors, or leave as-is to see them
+                if "Restock" in e['event_type']: 
+                    current_stock += e['quantity']
+                else: 
+                    current_stock -= e['quantity']
                 history_points.append({"date": e['event_date'], "stock": current_stock, "event_type": e['event_type']})
 
-            # 3. Consumption Math
+            # 3. Consumption Math & Confidence Logic
             cursor.execute("""
                 SELECT MIN(event_date) as first_use, COUNT(*) as units_finished
                 FROM INVENTORY_EVENT 
@@ -121,28 +122,54 @@ def get_restock_forecast():
             """, (role['product_id'], role['start_date']))
             usage = cursor.fetchone()
             
-            # Ensure stock is at least 0 for forecast logic
             valid_stock = max(0, current_stock) 
+            units = usage['units_finished'] if usage['units_finished'] else 0
             
-            if usage['units_finished'] >= 1 and usage['first_use']:
+            if units >= 1 and usage['first_use']:
+                # Confidence Ranking based on sample size
+                if units >= 3:
+                    conf = "High"
+                    error_margin = 0.10  # 10% variance
+                elif units == 2:
+                    conf = "Medium"
+                    error_margin = 0.25  # 25% variance
+                else:
+                    conf = "Low"
+                    error_margin = 0.45  # 45% variance
+
+                # Core Forecast Calculation
                 first_dt = datetime.strptime(usage['first_use'], '%Y-%m-%d')
                 total_days = max(1, (datetime.now() - first_dt).days)
-                days_per_unit = total_days / usage['units_finished']
+                days_per_unit = total_days / units
                 
                 days_remaining = int(valid_stock * days_per_unit)
-                expiry_dt = datetime.now() + timedelta(days=days_remaining)
+                now = datetime.now()
+                expected_dt = now + timedelta(days=days_remaining)
+                
+                # Confidence Interval Boundary Calculations
+                min_runout = now + timedelta(days=int(days_remaining * (1 - error_margin)))
+                max_runout = now + timedelta(days=int(days_remaining * (1 + error_margin)))
                 
                 forecasts.append({
                     **role,
                     "days_remaining": days_remaining,
-                    "expected_restock": expiry_dt.strftime('%Y-%m-%d'),
+                    "expected_restock": expected_dt.strftime('%Y-%m-%d'),
+                    "min_runout": min_runout.strftime('%Y-%m-%d'),
+                    "max_runout": max_runout.strftime('%Y-%m-%d'),
+                    "confidence": conf,
                     "stock_on_hand": valid_stock,
                     "history": history_points,
                     "status": "Calculated"
                 })
             else:
+                # Fallback for roles with no usage data yet
                 forecasts.append({
-                    **role, "days_remaining": 9999, "status": "Insufficient Data", "stock_on_hand": valid_stock, "history": history_points
+                    **role, 
+                    "days_remaining": 9999, 
+                    "status": "Insufficient Data", 
+                    "confidence": "N/A",
+                    "stock_on_hand": valid_stock, 
+                    "history": history_points
                 })
 
         forecasts.sort(key=lambda x: x['days_remaining'])
@@ -323,31 +350,65 @@ def log_event(event: InventoryEventCreate):
 
     return {"message": "Inventory event logged successfully."}
 
+from pydantic import BaseModel
+from typing import Optional
+
+class EventUpdate(BaseModel):
+    new_event_type: Optional[str] = None
+    new_event_date: Optional[str] = None
+    quantity: Optional[int] = None
+    cost_sgd: Optional[float] = None
+
 @app.patch("/events/")
 def update_event(product_id: int, event_type: str, event_date: str, event_data: EventUpdate):
     conn = sqlite3.connect("inventory.db")
     cursor = conn.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON;") 
+    
     try:
+        # 1. Build dynamic update fields
         update_fields = []
         params = []
+
+        if event_data.new_event_type is not None:
+            update_fields.append("event_type = ?")
+            params.append(event_data.new_event_type)
+        if event_data.new_event_date is not None:
+            update_fields.append("event_date = ?")
+            params.append(event_data.new_event_date)
         if event_data.quantity is not None:
             update_fields.append("quantity = ?")
             params.append(event_data.quantity)
+        
+        # 2. Logic for Restock Price
+        # We allow setting cost_sgd, but typically it's NULL for 'Finished' events
         if event_data.cost_sgd is not None:
             update_fields.append("cost_sgd = ?")
             params.append(event_data.cost_sgd)
 
         if not update_fields:
-            raise HTTPException(status_code=400, detail="No fields provided")
+            raise HTTPException(status_code=400, detail="No fields provided for update")
 
+        # 3. Use the original primary key values for the WHERE clause
         params.extend([product_id, event_type, event_date])
-        query = f"UPDATE INVENTORY_EVENT SET {', '.join(update_fields)} WHERE product_id = ? AND event_type = ? AND event_date = ?"
+        
+        query = f"""
+            UPDATE INVENTORY_EVENT 
+            SET {', '.join(update_fields)} 
+            WHERE product_id = ? AND event_type = ? AND event_date = ?
+        """
         
         cursor.execute(query, params)
+        
         if cursor.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Event not found")
+            conn.close()
+            raise HTTPException(status_code=404, detail="Original event not found")
+            
         conn.commit()
-        return {"message": "Event updated"}
+        return {"message": "Event successfully updated"}
+        
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="An event already exists for this product at that type/time.")
     except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

@@ -1,54 +1,86 @@
 import sqlite3
 from datetime import datetime, timedelta
+import random
 
 def seed():
     conn = sqlite3.connect("inventory.db")
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON;")
 
-    # Clear existing data
-    for table in ["INVENTORY_EVENT", "ROLE_HISTORY", "ROLE", "PRODUCT", "CATEGORY"]:
+    # 1. Clear existing data in dependency order
+    tables = ["INVENTORY_EVENT", "ROLE_HISTORY", "ROLE", "PRODUCT", "CATEGORY"]
+    for table in tables:
         cursor.execute(f"DELETE FROM {table}")
 
-    # 1. Create Category
+    # 2. Setup Category
     cursor.execute("INSERT INTO CATEGORY (name) VALUES ('Skincare')")
-    cat_id = cursor.lastrowid
+    skin_cat = cursor.lastrowid
 
     now = datetime.now()
 
-    # 2. Define Test Cases
-    # (Brand, Name, Role, Buffer, DaysSinceFirstFinish, CurrentStock)
-    test_cases = [
-        ('NATURIE', 'Hatomugi Skin Milk', 'Moisturiser', 7, 60, 1),  # Stable (60 days left)
-        ('LRP', 'Cicaplast Baume B5+', 'Barrier Cream', 14, 12, 1), # Warning (12 days left)
-        ('MENARINI', 'Tretinoin Gel', 'Retinoid', 7, 4, 1)          # Urgent (4 days left)
+    # 3. Realistic Skincare Test Data
+    # (Brand, Name, Role, Buffer, BasePrice, PriceVar, ConsumDays)
+    products_to_seed = [
+        ('NATURIE', 'Hatomugi Skin Milk', 'Face Moisturiser', 7, 12.50, 3.00, 45),
+        ('LRP', 'Cicaplast Baume B5+', 'Barrier Cream', 14, 22.00, 5.00, 25),
+        ('MENARINI', 'Tretinoin Gel', 'Retinoid', 7, 35.00, 8.00, 75),
+        ('COSRX', 'Low pH Cleanser', 'Cleanser', 7, 11.00, 2.50, 40)
     ]
 
-    for brand, p_name, r_name, buffer, days_ago, stock in test_cases:
+    for brand, p_name, r_name, buffer, base_price, var, consume_days in products_to_seed:
         # Create Product
-        cursor.execute("INSERT INTO PRODUCT (brand, name, amount, unit_of_measure) VALUES (?, ?, 100, 'ml')", (brand, p_name))
+        cursor.execute("""
+            INSERT INTO PRODUCT (brand, name, amount, unit_of_measure) 
+            VALUES (?, ?, 100, 'ml')
+        """, (brand, p_name))
         p_id = cursor.lastrowid
 
         # Create Role
-        cursor.execute("INSERT INTO ROLE (name, target_buffer_days, category_id) VALUES (?, ?, ?)", (r_name, buffer, cat_id))
+        cursor.execute("""
+            INSERT INTO ROLE (name, target_buffer_days, category_id) 
+            VALUES (?, ?, ?)
+        """, (r_name, buffer, skin_cat))
         r_id = cursor.lastrowid
-
-        # Create History
-        start_date = (now - timedelta(days=100)).strftime('%Y-%m-%d')
-        cursor.execute("INSERT INTO ROLE_HISTORY (role_id, product_id, start_date) VALUES (?, ?, ?)", (r_id, p_id, start_date))
-
-        # Create Events
-        # Initial Restock
-        first_restock_date = (now - timedelta(days=days_ago + 10)).strftime('%Y-%m-%d')
-        cursor.execute("INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, quantity) VALUES (?, 'Restock (+)', ?, ?)", (p_id, first_restock_date, stock + 1))
         
-        # First Finished Event (This sets the "Burn Rate")
-        finish_date = (now - timedelta(days=days_ago)).strftime('%Y-%m-%d')
-        cursor.execute("INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, quantity) VALUES (?, 'Finished (-)', ?, 1)", (p_id, finish_date))
+        # Create History Era (Starts 14 months ago)
+        start_date = now - timedelta(days=420)
+        cursor.execute("""
+            INSERT INTO ROLE_HISTORY (role_id, product_id, start_date) 
+            VALUES (?, ?, ?)
+        """, (r_id, p_id, start_date.strftime('%Y-%m-%d')))
+
+        current_date = start_date
+        stock = 0
+
+        # 4. Realistic Event Simulation
+        while current_date < now:
+            # Logic for Restock
+            if stock <= 1 or random.random() < 0.04:
+                buy_qty = random.choice([1, 2])
+                total_cost = (base_price + random.uniform(-var, var)) * buy_qty
+                
+                # FIX: 4 placeholders for 4 variables
+                cursor.execute("""
+                    INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, cost_sgd, quantity) 
+                    VALUES (?, 'Restock (+)', ?, ?, ?)
+                """, (p_id, current_date.strftime('%Y-%m-%d'), round(total_cost, 2), buy_qty))
+                stock += buy_qty
+                
+            # Logic for Consumption
+            usage_variance = random.randint(-5, 5)
+            current_date += timedelta(days=consume_days + usage_variance)
+            
+            if current_date < now and stock > 0:
+                # Matches schema: product_id, event_type, event_date, cost_sgd (None), quantity
+                cursor.execute("""
+                    INSERT INTO INVENTORY_EVENT (product_id, event_type, event_date, cost_sgd, quantity) 
+                    VALUES (?, 'Finished (-)', ?, NULL, 1)
+                """, (p_id, current_date.strftime('%Y-%m-%d')))
+                stock -= 1
 
     conn.commit()
     conn.close()
-    print("Database seeded with Green, Yellow, and Red test cases.")
+    print("Database successfully seeded with realistic history and price fluctuations.")
 
 if __name__ == "__main__":
     seed()
