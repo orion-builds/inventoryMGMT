@@ -23,7 +23,7 @@ const fetchData = async () => {
   }
 }
 
-// 1. First, filter by the search query
+// 1. Filter by the search query
 const filteredForecast = computed(() => {
   if (!searchQuery.value) return forecast.value
   const q = searchQuery.value.toLowerCase()
@@ -34,7 +34,7 @@ const filteredForecast = computed(() => {
   )
 })
 
-// 2. Partition based on dynamic urgency rules (using target_buffer_days)
+// 2. Partition based on urgency (target_buffer_days)
 const visibleCards = computed(() => {
   const data = filteredForecast.value
   if (!data.length) return []
@@ -56,7 +56,7 @@ const currentTotalDisplay = computed(() => {
 })
 
 // Graph & Logic Helpers
-const getPointY = (stock) => 80 - (Math.min(stock || 0, 5) * 16)
+const getPointY = (stock, maxVal) => 80 - ((Math.min(stock || 0, maxVal) / maxVal) * 80)
 const toDate = (str) => new Date(str)
 
 const getMarginDays = (item) => {
@@ -66,9 +66,7 @@ const getMarginDays = (item) => {
 }
 
 const getStatusClass = (item) => {
-  // Use a dedicated 'unknown' class for the 9999 sentinel
   if (item.days_remaining === 9999) return 'status-unknown' 
-  
   const buffer = item.target_buffer_days || 7
   if (item.days_remaining <= buffer) return 'status-urgent'
   if (item.days_remaining <= buffer + 7) return 'status-warning'
@@ -79,26 +77,29 @@ const getGraphData = (item) => {
   if (!item.history?.length) return null
   const start = toDate(item.history[0].date)
   const today = new Date()
-  const maxBound = toDate(item.max_runout || item.expected_restock)
+  const maxBound = toDate(item.max_runout || item.expected_restock || new Date().toISOString().split('T')[0])
   const totalMs = Math.max(1, maxBound - start)
   const getX = (d) => ((toDate(d) - start) / totalMs) * 240
+
+  // 1. Calculate the dynamic ceiling for this specific product [cite: 2026-03-04]
+  const localMax = Math.max(5, ...item.history.map(p => p.stock))
 
   let points = []
   let curStock = 0
   item.history.forEach((p) => {
     const x = getX(p.date)
-    if (p.event_type?.includes("Restock")) {
-      points.push(`${x},${getPointY(curStock)}`)
+    if (p.event_type?.includes("Restock") || p.event_type === "Init") {
+      points.push(`${x},${getPointY(curStock, localMax)}`)
       curStock = p.stock
-      points.push(`${x},${getPointY(curStock)}`)
+      points.push(`${x},${getPointY(curStock, localMax)}`)
     } else {
       curStock = p.stock
-      points.push(`${x},${getPointY(curStock)}`)
+      points.push(`${x},${getPointY(curStock, localMax)}`)
     }
   })
 
   const lastEvent = item.history[item.history.length - 1]
-  const lastX = getX(lastEvent.date), lastY = getPointY(lastEvent.stock)
+  const lastX = getX(lastEvent.date), lastY = getPointY(lastEvent.stock, localMax)
   const nowX = Math.min(240, getX(today))
   const expectedX = getX(item.expected_restock)
   const slope = (expectedX - lastX) !== 0 ? (80 - lastY) / (expectedX - lastX) : 0
@@ -108,8 +109,21 @@ const getGraphData = (item) => {
   const fanPoints = `${nowX},${nowY} ${minX},80 ${maxX},80`
 
   return { polyline: points.join(' '), lastX, lastY, nowX, nowY, fanPoints, expectedX, 
-    eventDots: item.history.map(p => ({ x: getX(p.date), y: getPointY(p.stock), label: `${p.event_type?.includes("Finished") ? "Remaining" : p.event_type}: ${p.stock.toFixed(2)} units`, date: p.date }))
+    eventDots: item.history.map(p => ({ 
+      x: getX(p.date), 
+      y: getPointY(p.stock, localMax), 
+      label: `${p.event_type}: ${p.stock.toFixed(2)} units`, 
+      type: p.event_type, 
+      date: p.date 
+    }))
   }
+}
+
+// Maps confidence levels to status colors for the margin text [cite: 2026-03-04]
+const getMarginClass = (item) => {
+  if (item.days_remaining === 9999) return 'grey-text'
+  const confMap = { 'Low': 'status-urgent', 'Medium': 'status-warning', 'High': 'status-stable' }
+  return confMap[item.confidence] || ''
 }
 
 onMounted(fetchData)
@@ -161,13 +175,9 @@ onMounted(fetchData)
             </div>
             <div class="days-box" :class="getStatusClass(item)">
               <div class="baseline-row">
-                <span class="main-days-num">
-                  {{ item.days_remaining === 9999 ? '?' : item.days_remaining }}
-                </span>
+                <span class="main-days-num">{{ item.days_remaining === 9999 ? '?' : item.days_remaining }}</span>
                 <div class="label-stack">
-                  <span class="margin-value" :class="{ 'grey-text': item.days_remaining === 9999 }">
-                    (&plusmn;{{ getMarginDays(item) }})
-                  </span>
+                  <span class="margin-value" :class="getMarginClass(item)">(&plusmn;{{ getMarginDays(item) }})</span>
                   <span class="days-label">DAYS</span>
                 </div>
               </div>
@@ -178,11 +188,10 @@ onMounted(fetchData)
             <div class="role-meta">
               <div class="role-name">
                 {{ item.role_name }}
-                <span v-if="item.confidence" class="conf-pill" :class="'pill-' + item.confidence.toLowerCase()">{{ item.confidence }}</span>
               </div>
               <div class="item-daily-cost" :class="{ 'grey-text': item.days_remaining === 9999 }">
                 S${{ item.daily_cost?.toFixed(2) }} 
-                <span class="per-day" :class="{ 'grey-text': item.days_remaining === 9999 }">/ day</span>
+                <span class="per-day">/ day</span>
               </div>
             </div>
             
@@ -199,10 +208,18 @@ onMounted(fetchData)
               <line class="zero-baseline" x1="0" y1="80" x2="240" y2="80" />
               <polygon v-if="item.status === 'Calculated'" class="confidence-fan" :points="getGraphData(item).fanPoints" />
               <polyline fill="none" stroke="#42b883" stroke-width="2.5" :points="getGraphData(item).polyline" />
+              
               <line v-if="item.status === 'Calculated'" stroke="#42b883" stroke-width="2.5" :x1="getGraphData(item).lastX" :y1="getGraphData(item).lastY" :x2="getGraphData(item).nowX" :y2="getGraphData(item).nowY" />
+              
               <line v-if="item.status === 'Calculated'" class="projection-line" :x1="getGraphData(item).nowX" :y1="getGraphData(item).nowY" :x2="getGraphData(item).expectedX" y2="80" />
-              <circle v-for="(dot, idx) in getGraphData(item).eventDots" :key="idx" :cx="dot.x" :cy="dot.y" r="4.5" class="node" @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }" @mouseleave="activePopup = null" />
-              <circle v-if="item.status === 'Calculated'" :cx="getGraphData(item).expectedX" cy="80" r="5" class="node runout-node" @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }" @mouseleave="activePopup = null" />
+              
+              <svg v-for="(dot, idx) in getGraphData(item).eventDots" :key="idx" :x="dot.x - 5" :y="dot.y - 5" width="10" height="10" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
+                  <circle cx="5" cy="5" r="4.5" :class="['node', { 'node-init': dot.type === 'Init' }]" @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }" @mouseleave="activePopup = null" />
+              </svg>
+
+              <svg v-if="item.status === 'Calculated'" :x="getGraphData(item).expectedX - 6" y="74" width="12" height="12" viewBox="0 0 12 12" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
+                <circle cx="6" cy="6" r="5" class="node runout-node" @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }" @mouseleave="activePopup = null" />
+              </svg>
             </svg>
             <div v-if="activePopup?.id.startsWith(item.role_id)" class="graph-tooltip" :style="{ left: (activePopup.x / 240 * 100) + '%', top: (activePopup.y / 80 * 100) + '%' }">
               <div class="tt-date">{{ activePopup.date }}</div>
@@ -232,9 +249,7 @@ onMounted(fetchData)
                   <div class="baseline-row">
                     <span class="main-days-num">{{ item.days_remaining === 9999 ? '?' : item.days_remaining }}</span>
                     <div class="label-stack">
-                      <span class="margin-value" :class="{ 'grey-text': item.days_remaining === 9999 }">
-                        (&plusmn;{{ getMarginDays(item) }})
-                      </span>
+                      <span class="margin-value" :class="{ 'grey-text': item.days_remaining === 9999 }">(&plusmn;{{ getMarginDays(item) }})</span>
                       <span class="days-label">DAYS</span>
                     </div>
                   </div>
@@ -244,17 +259,10 @@ onMounted(fetchData)
               <div class="card-header-sub">
                 <div class="role-meta">
                   <div class="role-name">{{ item.role_name }}</div>
-                  <div class="item-daily-cost" :class="{ 'grey-text': item.days_remaining === 9999 }">
-                    S${{ item.daily_cost?.toFixed(2) }} 
-                    <span class="per-day" :class="{ 'grey-text': item.days_remaining === 9999 }">/ day</span>
-                  </div>
+                  <div class="item-daily-cost">S${{ item.daily_cost?.toFixed(2) }} <span class="per-day">/ day</span></div>
                 </div>
-                
                 <div class="runout-meta">
                   <div class="runout-info">{{ item.expected_restock }}</div>
-                  <div class="wtp-info" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
-                    <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
-                  </div>
                 </div>
               </div>
               
@@ -263,11 +271,20 @@ onMounted(fetchData)
                   <line class="zero-baseline" x1="0" y1="80" x2="240" y2="80" />
                   <polygon v-if="item.status === 'Calculated'" class="confidence-fan" :points="getGraphData(item).fanPoints" />
                   <polyline fill="none" stroke="#42b883" stroke-width="2.5" :points="getGraphData(item).polyline" />
-                  <line v-if="item.status === 'Calculated'" stroke="#42b883" stroke-width="2.5" :x1="getGraphData(item).lastX" :y1="getGraphData(item).lastY" :x2="getGraphData(item).nowX" :y2="getGraphData(item).nowY" />
                   <line v-if="item.status === 'Calculated'" class="projection-line" :x1="getGraphData(item).nowX" :y1="getGraphData(item).nowY" :x2="getGraphData(item).expectedX" y2="80" />
-                  <circle v-for="(dot, idx) in getGraphData(item).eventDots" :key="idx" :cx="dot.x" :cy="dot.y" r="4.5" class="node" @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }" @mouseleave="activePopup = null" />
-                  <circle v-if="item.status === 'Calculated'" :cx="getGraphData(item).expectedX" cy="80" r="5" class="node runout-node" @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }" @mouseleave="activePopup = null" />
+                  
+                  <svg v-for="(dot, idx) in getGraphData(item).eventDots" :key="idx" :x="dot.x - 5" :y="dot.y - 5" width="10" height="10" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
+                    <circle cx="5" cy="5" r="4.5" :class="['node', { 'node-init': dot.type === 'Init' }]" @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }" @mouseleave="activePopup = null" />
+                  </svg>
+                  
+                  <svg v-if="item.status === 'Calculated'" :x="getGraphData(item).expectedX - 6" y="74" width="12" height="12" viewBox="0 0 12 12" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
+                    <circle cx="6" cy="6" r="5" class="node runout-node" @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }" @mouseleave="activePopup = null" />
+                  </svg>
                 </svg>
+                <div v-if="activePopup?.id.startsWith(item.role_id)" class="graph-tooltip" :style="{ left: (activePopup.x / 240 * 100) + '%', top: (activePopup.y / 80 * 100) + '%' }">
+                  <div class="tt-date">{{ activePopup.date }}</div>
+                  <div class="tt-info">{{ activePopup.label }}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -328,7 +345,7 @@ onMounted(fetchData)
 .main-days-num { font-size: 2.8rem; font-weight: 900; line-height: 1; margin: 0; }
 .label-stack { display: flex; flex-direction: column; position: relative; }
 .days-label { font-size: 0.75rem; font-weight: 800; line-height: 1; opacity: 0.9; }
-.margin-value { position: absolute; bottom: 100%; left: 0; font-size: 0.85rem; font-weight: 700; opacity: 0.5; white-space: nowrap; padding-bottom: 2px; }
+.margin-value { position: absolute; bottom: 100%; left: 0; font-size: 0.85rem; font-weight: 700; opacity: 0.85; white-space: nowrap; padding-bottom: 2px; }
 
 /* Meta & Status Colors */
 .card-header-sub { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
@@ -336,10 +353,6 @@ onMounted(fetchData)
 .role-name { color: #888; font-size: 0.85rem; font-weight: 500; display: flex; align-items: center; }
 .item-daily-cost { font-size: 0.75rem; color: #42b883; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
 .per-day { font-size: 0.6rem; color: #555; text-transform: uppercase; }
-.conf-pill { font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; margin-left: 8px; text-transform: uppercase; border: 1px solid transparent; }
-.pill-high { color: #42b883; border-color: rgba(66, 184, 131, 0.3); background: rgba(66, 184, 131, 0.05); }
-.pill-medium { color: #f1c40f; border-color: rgba(241, 196, 15, 0.3); background: rgba(241, 196, 15, 0.05); }
-.pill-low { color: #ff4757; border-color: rgba(255, 71, 87, 0.3); background: rgba(255, 71, 87, 0.05); }
 .status-urgent { color: #ff4757; }
 .status-warning { color: #f1c40f; }
 .status-stable { color: #42b883; }
@@ -356,12 +369,18 @@ onMounted(fetchData)
 .confidence-fan { fill: #42b883; fill-opacity: 0.07; stroke: none; }
 .projection-line { stroke: #42b883; stroke-width: 2; stroke-dasharray: 6; opacity: 0.4; }
 .zero-baseline { stroke: #ff4757; stroke-width: 1; opacity: 0.2; }
-.node { fill: #42b883; stroke: #000; cursor: pointer; transition: r 0.2s; }
+
+/* Fixed Node Logic */
+.node-wrapper { overflow: visible; }
+.node { fill: #42b883; stroke: #000; cursor: pointer; transition: r 0.2s; vector-effect: non-scaling-stroke; }
 .runout-node { fill: #ff4757; }
 .node:hover { r: 6; fill: #fff; }
+
 .graph-tooltip { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: #1a1a1a; border: 1px solid #42b883; padding: 8px 12px; border-radius: 6px; color: #fff; font-size: 0.7rem; text-align: center; white-space: nowrap; z-index: 100; box-shadow: 0 8px 20px rgba(0,0,0,0.5); pointer-events: none; }
 .tt-date { color: #777; font-size: 0.65rem; margin-bottom: 2px; }
 .tt-info { font-weight: 700; color: #42b883; }
 .status-unknown { color: #555 !important; }
 .grey-text { color: #555 !important; border-color: #333 !important; }
+/* Blue styling for initialization data points [cite: 2026-03-04] */
+.node-init { fill: #3498db !important; }
 </style>

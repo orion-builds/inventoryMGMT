@@ -194,12 +194,12 @@ def get_restock_forecast():
     cursor = conn.cursor()
     
     try:
-        # 1. Fetch Global Settings for WTP [cite: 2026-03-03]
+        # 1. Fetch Global Settings
         cursor.execute("SELECT value FROM SETTINGS WHERE key = 'default_holding_penalty'")
         setting_res = cursor.fetchone()
         default_h = float(setting_res['value']) if setting_res else 0.015 
 
-        # 2. Get Active Roles [cite: 2025-12-28, 2026-03-03]
+        # 2. Get Active Roles
         cursor.execute("""
             SELECT r.role_id, r.name as role_name, r.target_buffer_days, r.category_id, r.learned_h,
                    p.product_id, p.brand, p.name as product_name, rh.start_date
@@ -214,21 +214,30 @@ def get_restock_forecast():
         total_daily_burn = 0.0
 
         for role in active_roles:
-            # 3. Fetch events for Stock and EMA [cite: 2026-03-03]
             cursor.execute("""
                 SELECT event_date, event_type, quantity, cost_sgd 
                 FROM INVENTORY_EVENT 
                 WHERE product_id = ? AND event_date >= ?
                 ORDER BY event_date ASC
             """, (role['product_id'], role['start_date']))
-            events = cursor.fetchall()
+            all_events = [dict(e) for e in cursor.fetchall()]
 
+            # 3. Identify Anchor Point for "Init" cases
+            init_event = next((e for e in all_events if e['event_type'] == 'Init'), None)
+            anchor_date_str = role['start_date']
+            
+            if init_event and init_event['quantity'] < 1.0:
+                first_finish = next((e for e in all_events if e['event_type'] == 'Finished (-)' and e['event_date'] > init_event['event_date']), None)
+                if first_finish:
+                    anchor_date_str = first_finish['event_date']
+
+            # 4. History & Current Stock
             history_points = []
             current_stock = 0
             restock_prices = [] 
 
-            for e in events:
-                if "Restock" in e['event_type']: 
+            for e in all_events:
+                if "Restock" in e['event_type'] or e['event_type'] == 'Init': 
                     current_stock += e['quantity']
                     if e['cost_sgd'] and e['quantity'] > 0:
                         restock_prices.append(e['cost_sgd'] / e['quantity'])
@@ -241,32 +250,24 @@ def get_restock_forecast():
                     "event_type": e['event_type']
                 })
 
-            # 4. Usage Math: FIXED for the "One-Log" Edge Case [cite: 2026-03-03]
-            cursor.execute("""
-                SELECT COUNT(*) as units_finished
-                FROM INVENTORY_EVENT 
-                WHERE product_id = ? AND event_type = 'Finished (-)' AND event_date >= ?
-            """, (role['product_id'], role['start_date']))
-            usage = cursor.fetchone()
-            
+            # 5. INTERVAL-BASED USAGE MATH
+            # Rule: Only count 'Finished' events that occur strictly after our starting anchor
+            finished_events = [e for e in all_events if e['event_type'] == 'Finished (-)' and e['event_date'] > anchor_date_str]
             valid_stock = max(0, current_stock) 
-            units = usage['units_finished'] if usage['units_finished'] else 0
             
-            if units >= 1:
-                # FIX: Determine the earliest anchor point [cite: 2026-03-03]
-                # If we have very little data, use the date you assigned the role [cite: 2026-03-03]
-                first_dt = datetime.strptime(role['start_date'], '%Y-%m-%d')
-                now = datetime.now()
-                total_days = max(1, (now - first_dt).days)
+            # RULE: At least 2 depletions are required to measure a speed interval
+            if len(finished_events) >= 2:
+                first_finish_dt = datetime.strptime(finished_events[0]['event_date'], '%Y-%m-%d')
+                last_finish_dt = datetime.strptime(finished_events[-1]['event_date'], '%Y-%m-%d')
                 
-                # Confidence Ranking based on volume [cite: 2026-03-03]
-                if units >= 3: conf = "High"
-                elif units == 2: conf = "Medium"
-                else: conf = "Low"
-
-                burn_rate = units / total_days 
+                total_interval_days = max(1, (last_finish_dt - first_finish_dt).days)
+                # Cycles = total depletions - 1 (since the first depletion is just the start anchor)
+                usage_cycles = len(finished_events) - 1
                 
-                # Apply EMA Cascade [cite: 2026-03-03]
+                avg_days_per_unit = total_interval_days / usage_cycles
+                burn_rate = 1 / avg_days_per_unit 
+                
+                # EMA & WTP Logic
                 alpha = get_ema_alpha(cursor, role['role_id'], role['category_id'])
                 ema_unit_cost = 0.0
                 if restock_prices:
@@ -276,44 +277,32 @@ def get_restock_forecast():
                 
                 daily_cost = burn_rate * ema_unit_cost
                 total_daily_burn += daily_cost
-
                 days_remaining = int(valid_stock / burn_rate)
-                expected_dt = now + timedelta(days=days_remaining)
+                expected_dt = datetime.now() + timedelta(days=days_remaining)
                 
-                # --- WTP / TARGET DEAL PRICE LOGIC [cite: 2026-03-03] ---
-                buffer_days = role['target_buffer_days'] or 7
                 h_penalty = role['learned_h'] if role['learned_h'] is not None else default_h
-                excess_days = max(0, days_remaining - buffer_days)
-                
-                if excess_days > 0 and ema_unit_cost > 0:
-                    target_deal = ema_unit_cost * math.pow((1 - h_penalty), excess_days)
-                else:
-                    target_deal = ema_unit_cost 
+                excess_days = max(0, days_remaining - (role['target_buffer_days'] or 7))
+                target_deal = ema_unit_cost * math.pow((1 - h_penalty), excess_days) if excess_days > 0 else ema_unit_cost
                 
                 forecasts.append({
-                    **role,
-                    "days_remaining": days_remaining,
+                    **role, "days_remaining": days_remaining,
                     "expected_restock": expected_dt.strftime('%Y-%m-%d'),
-                    "daily_cost": round(daily_cost, 2),
-                    "confidence": conf,
-                    "stock_on_hand": valid_stock,
-                    "history": history_points,
-                    "status": "Calculated",
-                    "target_deal_price": round(target_deal, 2),
-                    "excess_days": excess_days,
+                    "daily_cost": round(daily_cost, 2), 
+                    "confidence": "High" if len(finished_events) >= 4 else "Medium",
+                    "stock_on_hand": valid_stock, "history": history_points,
+                    "status": "Calculated", "target_deal_price": round(target_deal, 2),
                     "ema_unit_cost": round(ema_unit_cost, 2)
                 })
             else:
-                # If 0 units finished, we stick to the 9999 warning [cite: 2026-03-03]
+                # Disqualifies single-event depletions (The Dettol/Whey Fix)
                 forecasts.append({
                     **role, "days_remaining": 9999, "daily_cost": 0.0,
                     "status": "Insufficient Data", "confidence": "N/A",
                     "stock_on_hand": valid_stock, "history": history_points,
-                    "target_deal_price": 0.0, "excess_days": 0, "ema_unit_cost": 0.0
+                    "target_deal_price": 0.0, "ema_unit_cost": 0.0
                 })
 
         forecasts.sort(key=lambda x: x['days_remaining'])
-        
         return {
             "summary": {
                 "daily": round(total_daily_burn, 2),

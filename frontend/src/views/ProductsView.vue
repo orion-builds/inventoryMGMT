@@ -223,11 +223,11 @@ onMounted(fetchProducts)
 .slider-group { flex: 1; min-width: 250px; }
 
 /* Double-Knob Logic [cite: 2026-03-03] */
-.multi-range-container { position: relative; width: 100%; height: 32px; display: flex; align-items: center; }
+.multi-range-container { position: relative; width: calc(95% + 9px); margin-left: -2px; height: 32px; display: flex; align-items: center; }
 .range-input { position: absolute; width: 100%; pointer-events: none; appearance: none; background: none; z-index: 2; }
 .range-input::-webkit-slider-thumb { pointer-events: auto; appearance: none; width: 18px; height: 18px; background: #42b883; border-radius: 50%; border: 2px solid #1a1a1a; cursor: pointer; }
 .min-input { z-index: 3; }
-.slider-track { position: absolute; width: 100%; height: 6px; background: #333; border-radius: 5px; z-index: 1; }
+.slider-track { position: absolute; width: 95%; height: 6px; background: #333; border-radius: 5px; z-index: 1; left: 18px; right: 0px;}
 
 .btn-reset { background: transparent; border: 1px solid #444; color: #666; padding: 8px 16px; border-radius: 6px; cursor: pointer; height: 38px; }
 

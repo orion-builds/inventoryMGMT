@@ -241,31 +241,64 @@ onMounted(fetchData)
     </div>
 
     <div v-if="showAddForm" class="modal-overlay" @click.self="showAddForm = false">
-      <div class="modal-content add-card">
+      <div class="modal-content">
         <div class="modal-header">
           <h3>{{ isEditing ? 'Edit Entry' : 'Log Activity' }}</h3>
-          <button @click="showAddForm = false" class="close-x">&times;</button>
+          <button @click="showAddForm = false" class="close-x-circle">&times;</button>
         </div>
-        <div class="form-line top">
-          <div class="search-container">
-            <input v-model="searchQuery" @focus="showDropdown = true" :disabled="isEditing" placeholder="Search Product..." />
-            <div v-if="showDropdown" class="results-dropdown">
-              <div v-for="p in products.filter(p => `${p.brand} ${p.name}`.toLowerCase().includes(searchQuery.toLowerCase())).slice(0,5)" 
-                :key="p.product_id" @click="selectedProduct=p; searchQuery=`${p.brand} - ${p.name}`; showDropdown=false" class="result-item">
-                <strong>{{ p.brand }}</strong> {{ p.name }}
+
+        <div class="form-body">
+          <div class="form-row">
+            <div class="input-group full-width">
+              <label>Product</label>
+              <div class="search-container">
+                <input v-model="searchQuery" @focus="showDropdown = true" :disabled="isEditing" placeholder="Search Product..." />
+                <div v-if="showDropdown" class="results-dropdown">
+                  <div v-for="p in products.filter(p => `${p.brand} ${p.name}`.toLowerCase().includes(searchQuery.toLowerCase())).slice(0,5)" 
+                    :key="p.product_id" @click="selectedProduct=p; searchQuery=`${p.brand} - ${p.name}`; showDropdown=false" class="result-item">
+                    <strong>{{ p.brand }}</strong> {{ p.name }}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-          <select v-model="type">
-            <option value="Restock (+)">Restocked (+)</option>
-            <option value="Finished (-)">Finished (-)</option>
-            <option value="Init">Init (Existing Stash)</option>
-          </select>
-        </div>
-        <div class="form-line bottom">
-          <div class="input-group"><label>Qty</label><input v-model.number="qty" type="number" step="0.1" /></div>
-          <div class="input-group" v-if="type.includes('Restock') || type === 'Init'"><label>Total Price (SGD)</label><input v-model.number="priceSgd" type="number" step="0.01" /></div>
-          <div class="input-group"><label>Date</label><input v-model="eventDate" type="date" /></div>
+
+          <div class="form-row">
+            <div class="input-group">
+              <div class="label-with-info">
+                <label>Entry Type</label>
+                <div class="info-trigger">
+                  ?
+                  <div class="info-tooltip">
+                    <p><strong class="text-green">Restock (+):</strong> Clean purchase data. Used for WTP & Penalty math.</p>
+                    <p><strong class="text-blue">Init:</strong> Half-empty stash or unknown price. Consumption rate starts only after this partial unit is finished.</p>
+                    <p><strong class="text-red">Finished (-):</strong> Record only current unit used up. Typically 1.</p>
+                  </div>
+                </div>
+              </div>
+              <select v-model="type">
+                <option value="Restock (+)">Restocked (+)</option>
+                <option value="Finished (-)">Finished (-)</option>
+                <option value="Init">Initialization (Legacy)</option>
+              </select>
+            </div>
+            <div class="input-group">
+              <label>Date</label>
+              <input v-model="eventDate" type="date" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="input-group">
+              <label>Quantity</label>
+              <input v-model.number="qty" type="number" step="0.1" placeholder="e.g. 0.6" />
+            </div>
+            <div class="input-group" v-if="type.includes('Restock') || type === 'Init'">
+              <label>Total Price (SGD)</label>
+              <input v-model.number="priceSgd" type="number" step="0.01" />
+            </div>
+          </div>
+
           <button @click="saveEvent" class="btn-save">{{ isEditing ? 'Update Entry' : 'Log Entry' }}</button>
         </div>
       </div>
@@ -274,13 +307,14 @@ onMounted(fetchData)
 </template>
 
 <style scoped>
+/* Main Container & Header */
 .events-container { max-width: 1400px; margin: 0 auto; padding: 40px; }
 .view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
 .header-actions { display: flex; gap: 12px; }
 
+/* Filter System */
 .btn-filter { background: transparent; border: 1px solid #444; color: #888; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
 .btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
-
 .filter-drawer { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 2rem; overflow: hidden; }
 .filter-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
 .filter-group { display: flex; flex-direction: column; gap: 6px; }
@@ -288,39 +322,81 @@ onMounted(fetchData)
 .filter-input { background: #222; border: 1px solid #444; color: #eee; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; }
 .btn-reset { background: transparent; border: 1px solid #444; color: #666; padding: 8px 16px; border-radius: 6px; cursor: pointer; height: 38px; }
 
+/* Transitions */
 .drawer-enter-active { transition: all 0.2s cubic-bezier(0, 0, 0.2, 1); max-height: 250px; }
 .drawer-leave-active { transition: all 0.15s cubic-bezier(0.4, 0, 1, 1); max-height: 250px; }
 .drawer-enter-from, .drawer-leave-to { opacity: 0; max-height: 0; transform: translateY(-8px) scale(0.98); }
 
+/* Table Styling */
 .table-wrapper { background: #111; border-radius: 12px; border: 1px solid #222; overflow: hidden; }
 table { width: 100%; border-collapse: collapse; }
 th { background: #1a1a1a; color: #42b883; text-align: left; padding: 12px 14px; font-size: 0.75rem; text-transform: uppercase; border-bottom: 2px solid #222; transition: 0.2s; }
 th.sortable:hover { background: #222; cursor: pointer; color: #fff; }
 .sortable { cursor: pointer; user-select: none; }
 td { padding: 14px; border-bottom: 1px solid #222; }
-.unit-cost-cell { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+.event-row:hover { background: #161616; }
+.bold { font-weight: bold; }
 
+/* Metrics & Badges */
+.unit-cost-cell { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .h-cell { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .h-val { color: #f1c40f; font-weight: bold; }
 .h-label { font-size: 0.6rem; color: #555; text-transform: uppercase; font-family: 'Inter', sans-serif; font-weight: 800; margin-left: 2px; }
-.empty-text { color: #333; font-style: normal; }
-
-.badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; }
+.badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; white-space: nowrap;}
 .badge.restocked { color: #42b883; background: rgba(66, 184, 131, 0.1); }
 .badge.finished { color: #ff4757; background: rgba(255, 71, 87, 0.1); }
-.badge.init { color: #3498db; background: rgba(52, 152, 219, 0.1); } /* Blue badge for Init [cite: 2026-03-03] */
+.badge.init { color: #3498db; background: rgba(52, 152, 219, 0.1); }
 
+/* Modal & Form Body [cite: 2026-03-04] */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; padding: 40px 32px 32px 32px; width: 500px; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+.form-body { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; }
+.form-row { display: flex; gap: 16px; width: 100%; }
+.full-width { flex: 1; }
+.input-group { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.input-group label { font-size: 0.65rem; color: #666; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+input, select { background: #222; border: 1px solid #333; color: #fff; padding: 12px; border-radius: 8px; font-size: 0.9rem; transition: 0.2s; }
+input:focus, select:focus { border-color: #42b883; outline: none; background: #2a2a2a; }
+
+/* Circular Close Button [cite: 2026-03-04] */
+.close-x-circle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  background: #ff4757; /* Regular red [cite: 2026-03-04] */
+  color: #fff; /* White cross [cite: 2026-03-04] */
+  border: none;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: 0.2s;
+  padding: 0;
+}
+.close-x-circle:hover { background: #ff6b81; transform: scale(1.1); }
+
+/* Tooltip System [cite: 2026-03-04] */
+.label-with-info { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.info-trigger { width: 14px; height: 14px; background: #333; color: #888; border-radius: 50%; font-size: 0.6rem; font-weight: 900; display: flex; align-items: center; justify-content: center; cursor: help; position: relative; }
+.info-tooltip { position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%); width: 240px; background: #222; border: 1px solid #444; color: #eee; padding: 12px; border-radius: 8px; font-size: 0.75rem; line-height: 1.4; opacity: 0; pointer-events: none; transition: 0.2s; z-index: 100; box-shadow: 0 10px 20px rgba(0,0,0,0.4); }
+.info-trigger:hover .info-tooltip { opacity: 1; bottom: 150%; }
+.info-tooltip p { margin-bottom: 12px; }
+.info-tooltip p:last-child { margin-bottom: 0; }
+.text-green { color: #42b883; }
+.text-blue { color: #3498db; }
+.text-red { color: #ff4757; }
+
+/* Buttons */
+.btn-toggle { background: #42b883; color: #000; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
+.btn-save { width: 100%; background: #42b883; color: #000; font-weight: 800; padding: 14px; border: none; border-radius: 8px; cursor: pointer; margin-top: 10px; }
 .action-buttons { opacity: 0; transition: 0.2s; display: flex; gap: 8px; justify-content: flex-end; }
 .event-row:hover .action-buttons { opacity: 1; }
-.event-row:hover { background: #161616; }
 .btn-edit, .btn-delete { padding: 6px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 .btn-edit { background: transparent; border: 1px solid #444; color: #888; }
 .btn-delete { background: #ff4757; color: #fff; border: none; }
-.btn-toggle { background: #42b883; color: #000; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
-
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; padding: 32px; width: 600px; }
-.input-group label { font-size: 0.65rem; color: #666; font-weight: 800; text-transform: uppercase; }
-input, select { background: #222; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 8px; }
-.btn-save { width: 100%; background: #42b883; color: #000; font-weight: 800; padding: 12px; border: none; border-radius: 8px; cursor: pointer; }
 </style>
