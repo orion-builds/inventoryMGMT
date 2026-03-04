@@ -60,9 +60,15 @@ const getPointY = (stock, maxVal) => 80 - ((Math.min(stock || 0, maxVal) / maxVa
 const toDate = (str) => new Date(str)
 
 const getMarginDays = (item) => {
-  if (item.status !== 'Calculated') return 0
-  const marginMap = { 'High': 0.10, 'Medium': 0.25, 'Low': 0.45 }
-  return Math.round(item.days_remaining * (marginMap[item.confidence] || 0))
+  if (item.status !== 'Calculated' || item.cv === undefined || item.cv === null) return 0
+  
+  const sampleStrength = Math.sqrt(item.intervals_count || 1)
+  const marginFactor = item.cv / sampleStrength
+  
+  // This 0.02 floor will now correctly apply to items with 0 variation [cite: 2026-03-04]
+  const finalFactor = Math.max(0.02, marginFactor)
+  
+  return Math.round(item.days_remaining * finalFactor)
 }
 
 const getStatusClass = (item) => {
@@ -249,7 +255,7 @@ onMounted(fetchData)
                   <div class="baseline-row">
                     <span class="main-days-num">{{ item.days_remaining === 9999 ? '?' : item.days_remaining }}</span>
                     <div class="label-stack">
-                      <span class="margin-value" :class="{ 'grey-text': item.days_remaining === 9999 }">(&plusmn;{{ getMarginDays(item) }})</span>
+                      <span class="margin-value" :class="getMarginClass(item)">(&plusmn;{{ getMarginDays(item) }})</span>
                       <span class="days-label">DAYS</span>
                     </div>
                   </div>

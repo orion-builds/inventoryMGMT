@@ -257,15 +257,30 @@ def get_restock_forecast():
             
             # RULE: At least 2 depletions are required to measure a speed interval
             if len(finished_events) >= 2:
-                first_finish_dt = datetime.strptime(finished_events[0]['event_date'], '%Y-%m-%d')
-                last_finish_dt = datetime.strptime(finished_events[-1]['event_date'], '%Y-%m-%d')
+                # 1. Calculate individual gaps between depletions [cite: 2026-03-04]
+                intervals = []
+                for i in range(len(finished_events) - 1):
+                    d1 = datetime.strptime(finished_events[i]['event_date'], '%Y-%m-%d')
+                    d2 = datetime.strptime(finished_events[i+1]['event_date'], '%Y-%m-%d')
+                    intervals.append(max(1, (d2 - d1).days))
                 
-                total_interval_days = max(1, (last_finish_dt - first_finish_dt).days)
-                # Cycles = total depletions - 1 (since the first depletion is just the start anchor)
-                usage_cycles = len(finished_events) - 1
-                
-                avg_days_per_unit = total_interval_days / usage_cycles
-                burn_rate = 1 / avg_days_per_unit 
+                mean_int = sum(intervals) / len(intervals)
+                burn_rate = 1 / mean_int 
+
+                # 2. Calculate Coefficient of Variation (CV) [cite: 2026-03-04]
+                variance = sum((x - mean_int)**2 for x in intervals) / len(intervals)
+                std_dev = math.sqrt(variance)
+                cv = std_dev / mean_int if mean_int > 0 else 0
+
+                # 3. Stability-Based Confidence Rating [cite: 2026-03-04]
+                # Stability improves as CV decreases and sample size increases [cite: 2026-03-04]
+                stability_score = cv / math.sqrt(len(intervals))
+                if stability_score < 0.05 and len(finished_events) >= 4:
+                    conf = "High"
+                elif stability_score < 0.15:
+                    conf = "Medium"
+                else:
+                    conf = "Low"
                 
                 # EMA & WTP Logic
                 alpha = get_ema_alpha(cursor, role['role_id'], role['category_id'])
@@ -285,10 +300,12 @@ def get_restock_forecast():
                 target_deal = ema_unit_cost * math.pow((1 - h_penalty), excess_days) if excess_days > 0 else ema_unit_cost
                 
                 forecasts.append({
-                    **role, "days_remaining": days_remaining,
+                    **role, "days_remaining": int(valid_stock / burn_rate),
+                    "confidence": conf,
+                    "cv": round(cv, 4), # Pass CV to frontend for margin math [cite: 2026-03-04]
+                    "intervals_count": len(intervals),
                     "expected_restock": expected_dt.strftime('%Y-%m-%d'),
                     "daily_cost": round(daily_cost, 2), 
-                    "confidence": "High" if len(finished_events) >= 4 else "Medium",
                     "stock_on_hand": valid_stock, "history": history_points,
                     "status": "Calculated", "target_deal_price": round(target_deal, 2),
                     "ema_unit_cost": round(ema_unit_cost, 2)
