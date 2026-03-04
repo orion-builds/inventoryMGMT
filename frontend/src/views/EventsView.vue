@@ -43,7 +43,9 @@ const fetchData = async () => {
 }
 
 const calculateImpliedH = (e) => {
-  if (!e.unit_cost || !e.stock_before_event || !e.quantity) return null
+  // RULE: Initializations do not have an implied penalty H [cite: 2026-03-03]
+  if (e.event_type === 'Init' || !e.unit_cost || !e.stock_before_event || !e.quantity) return null
+  
   const pPaid = e.cost_sgd / e.quantity
   const pBase = e.unit_cost
   const buffer = 7 
@@ -115,7 +117,14 @@ const openEditModal = (event) => {
 
 const saveEvent = async () => {
   if (!selectedProduct.value) return alert("Please select a product.")
-  const costValue = type.value.includes('Restock') ? priceSgd.value : null
+  
+  // RULE: Only one Init entry allowed per product [cite: 2026-03-03]
+  if (type.value === 'Init' && !isEditing.value) {
+    const hasInit = events.value.some(e => e.product_id === selectedProduct.value.product_id && e.event_type === 'Init')
+    if (hasInit) return alert("An initialization entry already exists for this product.")
+  }
+
+  const costValue = (type.value.includes('Restock') || type.value === 'Init') ? priceSgd.value : null
   const payload = isEditing.value 
     ? { new_event_type: type.value, new_event_date: eventDate.value, quantity: qty.value, cost_sgd: costValue }
     : { product_id: selectedProduct.value.product_id, event_type: type.value, event_date: eventDate.value, quantity: qty.value, cost_sgd: costValue }
@@ -172,6 +181,7 @@ onMounted(fetchData)
             <option value="all">All Types</option>
             <option value="Restock (+)">Restock (+)</option>
             <option value="Finished (-)">Finished (-)</option>
+            <option value="Init">Initialization</option>
           </select>
           <select v-model="filterProdId" class="filter-input">
             <option value="all">All Products</option>
@@ -200,7 +210,13 @@ onMounted(fetchData)
           <tr v-for="e in filteredEvents" :key="`${e.product_id}-${e.event_date}-${e.event_type}`" class="event-row">
             <td>{{ e.event_date }}</td>
             <td class="bold">{{ e.brand }} {{ e.name }}</td>
-            <td><span class="badge" :class="e.event_type.includes('Restock') ? 'restocked' : 'finished'">{{ e.event_type }}</span></td>
+            <td>
+              <span class="badge" :class="{
+                'restocked': e.event_type.includes('Restock'),
+                'finished': e.event_type.includes('Finished'),
+                'init': e.event_type === 'Init'
+              }">{{ e.event_type }}</span>
+            </td>
             <td>{{ e.quantity }}</td>
             <td>{{ e.cost_sgd ? `S$${e.cost_sgd.toFixed(2)}` : '-' }}</td>
             <td class="unit-cost-cell">{{ e.cost_sgd ? `S$${e.unit_cost_display.toFixed(2)}` : '-' }}</td>
@@ -243,11 +259,12 @@ onMounted(fetchData)
           <select v-model="type">
             <option value="Restock (+)">Restocked (+)</option>
             <option value="Finished (-)">Finished (-)</option>
+            <option value="Init">Init (Existing Stash)</option>
           </select>
         </div>
         <div class="form-line bottom">
-          <div class="input-group"><label>Qty</label><input v-model.number="qty" type="number" /></div>
-          <div class="input-group" v-if="type.includes('Restock')"><label>Total Price (SGD)</label><input v-model.number="priceSgd" type="number" step="0.01" /></div>
+          <div class="input-group"><label>Qty</label><input v-model.number="qty" type="number" step="0.1" /></div>
+          <div class="input-group" v-if="type.includes('Restock') || type === 'Init'"><label>Total Price (SGD)</label><input v-model.number="priceSgd" type="number" step="0.01" /></div>
           <div class="input-group"><label>Date</label><input v-model="eventDate" type="date" /></div>
           <button @click="saveEvent" class="btn-save">{{ isEditing ? 'Update Entry' : 'Log Entry' }}</button>
         </div>
@@ -271,7 +288,6 @@ onMounted(fetchData)
 .filter-input { background: #222; border: 1px solid #444; color: #eee; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; }
 .btn-reset { background: transparent; border: 1px solid #444; color: #666; padding: 8px 16px; border-radius: 6px; cursor: pointer; height: 38px; }
 
-/* Snappy Drawer Animation [cite: 2026-03-03] */
 .drawer-enter-active { transition: all 0.2s cubic-bezier(0, 0, 0.2, 1); max-height: 250px; }
 .drawer-leave-active { transition: all 0.15s cubic-bezier(0.4, 0, 1, 1); max-height: 250px; }
 .drawer-enter-from, .drawer-leave-to { opacity: 0; max-height: 0; transform: translateY(-8px) scale(0.98); }
@@ -281,7 +297,6 @@ table { width: 100%; border-collapse: collapse; }
 th { background: #1a1a1a; color: #42b883; text-align: left; padding: 12px 14px; font-size: 0.75rem; text-transform: uppercase; border-bottom: 2px solid #222; transition: 0.2s; }
 th.sortable:hover { background: #222; cursor: pointer; color: #fff; }
 .sortable { cursor: pointer; user-select: none; }
-.sortable:hover { background: #222; }
 td { padding: 14px; border-bottom: 1px solid #222; }
 .unit-cost-cell { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 
@@ -293,6 +308,7 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 .badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; }
 .badge.restocked { color: #42b883; background: rgba(66, 184, 131, 0.1); }
 .badge.finished { color: #ff4757; background: rgba(255, 71, 87, 0.1); }
+.badge.init { color: #3498db; background: rgba(52, 152, 219, 0.1); } /* Blue badge for Init [cite: 2026-03-03] */
 
 .action-buttons { opacity: 0; transition: 0.2s; display: flex; gap: 8px; justify-content: flex-end; }
 .event-row:hover .action-buttons { opacity: 1; }
