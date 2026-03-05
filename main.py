@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware # no colour for some reason
 from pydantic import BaseModel # comes with fastapi pip
 from typing import Optional
@@ -145,7 +145,7 @@ def update_learned_habit(cursor, role_id):
     cursor.execute("""
         SELECT stock_before_event, implied_h 
         FROM INVENTORY_EVENT 
-        WHERE role_id = ? AND event_type LIKE 'Restock%' 
+        WHERE role_id = ? AND (event_type LIKE 'Restock%' OR event_type LIKE 'Finished%')
         ORDER BY event_date DESC, event_id DESC LIMIT 1
     """, (role_id,))
     latest_event = cursor.fetchone()
@@ -178,6 +178,7 @@ def update_learned_habit(cursor, role_id):
             holding_penalty = ?
         WHERE role_id = ?
     """, (new_buffer_rounded, new_penalty, role_id))
+
 @app.get("/dashboard/forecast")
 def get_restock_forecast():
     conn = sqlite3.connect("inventory.db")
@@ -458,7 +459,6 @@ def get_products_with_stock():
     finally:
         conn.close()
 
-# --- GET ALL INVENTORY EVENTS ---
 @app.get("/events/")
 def get_events():
     conn = sqlite3.connect("inventory.db")
@@ -556,8 +556,9 @@ def log_event(event: InventoryEventCreate):
         """, (event.product_id, role_id, event.event_type, event.event_date, 
               event.cost_sgd, event.quantity, p_base, stock_before, implied_h))
         
-        # 4. Trigger the Back-Solver Machine Learning 
-        if "Restock" in event.event_type and role_id:
+        # 4. Trigger the Feedback Loop
+        # We learn on Restocks (WTP/Penalty) AND on Finishes (Usage/Buffer)
+        if role_id and ("Restock" in event.event_type or "Finished" in event.event_type):
             update_learned_habit(cursor, role_id)
         
         conn.commit()
@@ -713,7 +714,6 @@ def get_current_stock(product_id: int):
         "current_stock": stock
     }
 
-# --- CATEGORY ROUTE ---
 @app.get("/categories/")
 def get_categories():
     conn = sqlite3.connect("inventory.db")
@@ -801,7 +801,6 @@ def delete_category(category_id: int):
     finally:
         conn.close()
 
-# --- ROLE ROUTE ---
 @app.get("/roles/")
 def get_roles():
     conn = sqlite3.connect("inventory.db")
@@ -916,7 +915,6 @@ def delete_role(role_id: int):
     finally:
         conn.close()
 
-# --- GET ALL ROLE HISTORY ---
 @app.get("/role-history/")
 def get_role_history():
     conn = sqlite3.connect("inventory.db")
@@ -1025,3 +1023,41 @@ def update_setting(key: str, value: str):
     conn.commit()
     conn.close()
     return {"message": f"Setting '{key}' updated successfully"}
+
+@app.get("/export-data")
+def export_data():
+    conn = sqlite3.connect("inventory.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    tables = ["CATEGORY", "PRODUCT", "ROLE", "ROLE_HISTORY", "INVENTORY_EVENT", "SETTINGS"]
+    dump = {}
+
+    for table in tables:
+        cursor.execute(f"SELECT * FROM {table}")
+        dump[table] = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    # Return as a file download for convenience
+    return dump
+
+@app.post("/import-data")
+async def import_data(data: dict):
+    conn = sqlite3.connect("inventory.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+        for table, rows in data.items():
+            cursor.execute(f"DELETE FROM {table}")
+            if not rows: continue
+            columns = rows[0].keys()
+            query = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(columns))})"
+            cursor.executemany(query, [tuple(row.values()) for row in rows])
+        cursor.execute("PRAGMA foreign_keys = ON;")
+        conn.commit()
+        return {"message": "Import Successful"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
