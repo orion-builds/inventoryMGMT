@@ -121,71 +121,63 @@ def get_current_ema_for_product(cursor, product_id, role_id, category_id):
     return ema
 
 def update_learned_habit(cursor, role_id):
-    """Back-solves H based on historical 'Early' restocks with dynamic burn rate."""
-    
-    # 1. Fetch Role config and current product context [cite: 2026-03-03]
+    # 1. Fetch current role settings
     cursor.execute("""
-        SELECT r.target_buffer_days, rh.product_id, rh.start_date 
-        FROM ROLE r
-        LEFT JOIN ROLE_HISTORY rh ON r.role_id = rh.role_id AND rh.end_date IS NULL
-        WHERE r.role_id = ?
+        SELECT target_buffer_days, holding_penalty, ema_alpha 
+        FROM ROLE 
+        WHERE role_id = ?
     """, (role_id,))
-    role_info = cursor.fetchone()
-    if not role_info: return
+    role = cursor.fetchone()
     
-    buffer = role_info['target_buffer_days'] or 7
-    product_id = role_info['product_id']
-    start_date = role_info['start_date']
+    if not role:
+        return
 
-    # 2. Calculate the CURRENT burn rate for this role [cite: 2026-03-03]
-    # We use the same 'Finished (-)' logic from your forecast endpoint [cite: 2025-12-28]
-    burn_rate = 1.0 # Default fallback [cite: 2026-03-03]
-    if product_id and start_date:
-        cursor.execute("""
-            SELECT MIN(event_date) as first_use, COUNT(*) as units_finished
-            FROM INVENTORY_EVENT 
-            WHERE product_id = ? AND event_type = 'Finished (-)' AND event_date >= ?
-        """, (product_id, start_date))
-        usage = cursor.fetchone()
-        if usage and usage['units_finished'] >= 1 and usage['first_use']:
-            first_dt = datetime.strptime(usage['first_use'], '%Y-%m-%d')
-            total_days = max(1, (datetime.now() - first_dt).days)
-            burn_rate = usage['units_finished'] / total_days
+    # Default learning rate (alpha) is 0.3 if not overridden
+    alpha = role['ema_alpha'] if role['ema_alpha'] is not None else 0.3
+    old_buffer = role['target_buffer_days'] if role['target_buffer_days'] is not None else 7
+    old_penalty = role['holding_penalty'] if role['holding_penalty'] is not None else 0.002
 
-    # 3. Fetch historical restocks [cite: 2026-03-03]
+    # 2. Fetch the most recent restock event for this role to learn from
     cursor.execute("""
-        SELECT cost_sgd, quantity, unit_cost, stock_before_event
-        FROM INVENTORY_EVENT
+        SELECT stock_before_event, implied_h 
+        FROM INVENTORY_EVENT 
         WHERE role_id = ? AND event_type LIKE 'Restock%' 
-        AND unit_cost > 0 AND stock_before_event IS NOT NULL
+        ORDER BY event_date DESC, event_id DESC LIMIT 1
     """, (role_id,))
+    latest_event = cursor.fetchone()
     
-    restocks = cursor.fetchall()
-    penalties = []
-
-    for r in restocks:
-        if r['quantity'] <= 0: continue
-        p_paid = r['cost_sgd'] / r['quantity']
-        p_base = r['unit_cost']
+    if not latest_event:
+        return
         
-        # 4. Use the burn_rate to find ACTUAL excess days [cite: 2026-03-03]
-        days_on_hand = r['stock_before_event'] / burn_rate
-        excess_days = max(0, days_on_hand - buffer)
+    new_buffer_rounded = old_buffer
+    new_penalty = old_penalty
+    
+    # 3. Feedback Loop A: Target Buffer
+    if latest_event['stock_before_event'] is not None:
+        actual_runway = latest_event['stock_before_event']
+        # Blend the actual behavior with the old rule
+        new_buffer = (alpha * actual_runway) + ((1 - alpha) * old_buffer)
+        new_buffer_rounded = max(0, int(round(new_buffer))) # Ensure a clean, positive integer
+        
+    # 4. Feedback Loop B: Holding Penalty (h)
+    if latest_event['implied_h'] is not None:
+        # Note: implied_h is stored as a percentage (e.g., 0.5 for 0.5%). 
+        # We must divide by 100 to blend it with the decimal holding_penalty (0.005)
+        actual_h_decimal = latest_event['implied_h'] / 100.0
+        
+        # Blend the actual penalty with the old rule
+        new_penalty = (alpha * actual_h_decimal) + ((1 - alpha) * old_penalty)
+        
+        # Guardrail: Keep the penalty within a sane economic range (0.01% to 5% per day)
+        new_penalty = max(0.0001, min(new_penalty, 0.05))
 
-        # 5. The Solver [cite: 2026-03-03]
-        if excess_days > 0 and p_paid < p_base:
-            try:
-                # Algebra: H = 1 - (P_paid / P_base)^(1 / excess_days) [cite: 2026-03-03]
-                h = 1 - math.pow((p_paid / p_base), (1 / excess_days))
-                # Bound H between 0.001 and 0.1 to prevent crazy outlier results [cite: 2026-03-03]
-                penalties.append(max(0.001, min(h, 0.1)))
-            except (ValueError, ZeroDivisionError):
-                continue
-
-    if penalties:
-        # Save the mean penalty back to the role [cite: 2026-03-03]
-        learned_h = sum(penalties) / len(penalties)
-        cursor.execute("UPDATE ROLE SET learned_h = ? WHERE role_id = ?", (learned_h, role_id))
+    # 5. Commit the updated habits back to the Role
+    cursor.execute("""
+        UPDATE ROLE 
+        SET target_buffer_days = ?,
+            holding_penalty = ?
+        WHERE role_id = ?
+    """, (new_buffer_rounded, new_penalty, role_id))
 
 @app.get("/dashboard/forecast")
 def get_restock_forecast():
@@ -201,7 +193,7 @@ def get_restock_forecast():
 
         # 2. Get Active Roles
         cursor.execute("""
-            SELECT r.role_id, r.name as role_name, r.target_buffer_days, r.category_id, r.learned_h,
+            SELECT r.role_id, r.name as role_name, r.target_buffer_days, r.category_id, r.holding_penalty,
                    p.product_id, p.brand, p.name as product_name, rh.start_date
             FROM ROLE_HISTORY rh
             JOIN ROLE r ON rh.role_id = r.role_id
@@ -295,7 +287,7 @@ def get_restock_forecast():
                 days_remaining = int(valid_stock / burn_rate)
                 expected_dt = datetime.now() + timedelta(days=days_remaining)
                 
-                h_penalty = role['learned_h'] if role['learned_h'] is not None else default_h
+                h_penalty = role['holding_penalty'] if role['holding_penalty'] is not None else default_h
                 excess_days = max(0, days_remaining - (role['target_buffer_days'] or 7))
                 target_deal = ema_unit_cost * math.pow((1 - h_penalty), excess_days) if excess_days > 0 else ema_unit_cost
                 
@@ -503,9 +495,10 @@ def log_event(event: InventoryEventCreate):
     cursor.execute("PRAGMA foreign_keys = ON;")
     
     try:
-        # 1. Fetch Role and Category context [cite: 2026-03-03]
+        # 1. Fetch Role, Category, and Target Buffer context 
+        # (Updated to also grab r.target_buffer_days in one swift query)
         cursor.execute("""
-            SELECT r.role_id, r.category_id 
+            SELECT r.role_id, r.category_id, r.target_buffer_days
             FROM ROLE_HISTORY rh
             JOIN ROLE r ON rh.role_id = r.role_id
             WHERE rh.product_id = ? AND rh.end_date IS NULL
@@ -514,14 +507,14 @@ def log_event(event: InventoryEventCreate):
         
         role_id = context['role_id'] if context else None
         category_id = context['category_id'] if context else None
+        buffer_days = context['target_buffer_days'] if context and context['target_buffer_days'] is not None else 7
 
         # --- NEW CONSTRAINT: Prevent Future Dates ---
-        from datetime import datetime # (Ensure this is imported at the top of your file)
+        from datetime import datetime 
         if datetime.strptime(event.event_date, '%Y-%m-%d').date() > datetime.now().date():
             raise HTTPException(status_code=400, detail="Event date cannot be in the future.")
 
-        # 2. Capture baseline context BEFORE the new event [cite: 2026-03-03]
-        # FIX: Ensure 'Init' is counted as positive stock so it can be consumed [cite: 2026-03-04]
+        # 2. Capture baseline context BEFORE the new event 
         cursor.execute("""
             SELECT SUM(CASE 
                 WHEN event_type LIKE 'Restock%' OR event_type = 'Init' THEN quantity 
@@ -533,27 +526,38 @@ def log_event(event: InventoryEventCreate):
         res = cursor.fetchone()
         stock_before = res['current_stock'] if res['current_stock'] is not None else 0.0
         
-        # --- NEW CONSTRAINT: Prevent over-consumption [cite: 2026-03-04] ---
+        # --- NEW CONSTRAINT: Prevent over-consumption ---
         if event.event_type == 'Finished (-)' and event.quantity > stock_before:
             raise HTTPException(
                 status_code=400, 
                 detail=f"Insufficient stock. You only have {stock_before} units remaining."
             )
         
-        # Calculate EMA baseline using existing cascade rules [cite: 2026-03-03]
+        # Calculate EMA baseline using existing cascade rules 
         p_base = 0.0
         if role_id and category_id:
             p_base = get_current_ema_for_product(cursor, event.product_id, role_id, category_id)
 
-        # 3. Insert the Event with Snapshot [cite: 2026-03-03]
+        # --- NEW: Calculate Implied Holding Penalty (h) ---
+        implied_h = None
+        if 'Restock' in event.event_type and event.cost_sgd and event.quantity and p_base > 0:
+            p_deal = event.cost_sgd / event.quantity
+            excess_days = max(0, stock_before - buffer_days)
+            
+            # Guardrail: Only calculate if bought early AND at a discount
+            if excess_days > 0 and p_deal < p_base:
+                # Store it as a percentage to match your frontend formatting
+                implied_h = (1 - (p_deal / p_base) ** (1 / excess_days)) * 100
+
+        # 3. Insert the Event with Snapshot (Now including implied_h)
         cursor.execute("""
             INSERT INTO INVENTORY_EVENT 
-            (product_id, role_id, event_type, event_date, cost_sgd, quantity, unit_cost, stock_before_event)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (product_id, role_id, event_type, event_date, cost_sgd, quantity, unit_cost, stock_before_event, implied_h)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (event.product_id, role_id, event.event_type, event.event_date, 
-              event.cost_sgd, event.quantity, p_base, stock_before))
+              event.cost_sgd, event.quantity, p_base, stock_before, implied_h))
         
-        # 4. Trigger the Back-Solver Machine Learning [cite: 2026-03-03]
+        # 4. Trigger the Back-Solver Machine Learning 
         if "Restock" in event.event_type and role_id:
             update_learned_habit(cursor, role_id)
         

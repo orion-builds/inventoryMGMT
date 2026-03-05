@@ -42,26 +42,10 @@ const fetchData = async () => {
   } catch (error) { console.error("Fetch failed:", error) } finally { loading.value = false }
 }
 
-const calculateImpliedH = (e) => {
-  // RULE: Initializations do not have an implied penalty H [cite: 2026-03-03]
-  if (e.event_type === 'Init' || !e.unit_cost || !e.stock_before_event || !e.quantity) return null
-  
-  const pPaid = e.cost_sgd / e.quantity
-  const pBase = e.unit_cost
-  const buffer = 7 
-  const excessDays = Math.max(0, e.stock_before_event - buffer)
-  if (excessDays <= 0 || pPaid >= pBase) return null
-  try {
-    const h = 1 - Math.pow((pPaid / pBase), (1 / excessDays))
-    return h * 100 
-  } catch (err) { return null }
-}
-
 const filteredEvents = computed(() => {
   let result = events.value.map(e => ({
     ...e,
     unit_cost_display: e.cost_sgd && e.quantity ? e.cost_sgd / e.quantity : 0,
-    implied_h: calculateImpliedH(e)
   })).filter(e => {
     const matchesSearch = !filterText.value || 
       `${e.brand} ${e.name}`.toLowerCase().includes(filterText.value.toLowerCase());
@@ -238,7 +222,7 @@ onMounted(fetchData)
             <td>{{ e.cost_sgd ? `S$${e.cost_sgd.toFixed(2)}` : '-' }}</td>
             <td class="unit-cost-cell">{{ e.cost_sgd ? `S$${e.unit_cost_display.toFixed(2)}` : '-' }}</td>
             <td class="h-cell">
-              <template v-if="e.implied_h !== null">
+              <template v-if="typeof e.implied_h === 'number'">
                 <span class="h-val">{{ e.implied_h.toFixed(1) }}%</span>
                 <span class="h-label">/day</span>
               </template>
@@ -379,8 +363,11 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 .badge.init { color: #3498db; background: rgba(52, 152, 219, 0.1); }
 
 /* Modal & Form Body [cite: 2026-03-04] */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; padding: 40px 32px 32px 32px; width: 500px; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+/* Inherits base modal styles from global CSS */
+.modal-content { 
+  width: 500px; /* Preserve specific width for the events modal */
+}
+
 .form-body { display: flex; flex-direction: column; gap: 20px; margin-top: 20px; }
 .form-row { display: flex; gap: 16px; width: 100%; }
 .full-width { flex: 1; }
@@ -389,27 +376,7 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 input, select { background: #222; border: 1px solid #333; color: #fff; padding: 12px; border-radius: 8px; font-size: 0.9rem; transition: 0.2s; }
 input:focus, select:focus { border-color: #42b883; outline: none; background: #2a2a2a; }
 
-/* Circular Close Button [cite: 2026-03-04] */
-.close-x-circle {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  width: 28px;
-  height: 28px;
-  background: #ff4757; /* Regular red [cite: 2026-03-04] */
-  color: #fff; /* White cross [cite: 2026-03-04] */
-  border: none;
-  border-radius: 50%;
-  font-size: 1.2rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: 0.2s;
-  padding: 0;
-}
-.close-x-circle:hover { background: #ff6b81; transform: scale(1.1); }
+/* Note: Circular Close Button CSS removed entirely to use global styles */
 
 /* Tooltip System [cite: 2026-03-04] */
 .label-with-info { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
