@@ -185,7 +185,7 @@ onMounted(fetchProducts)
       <div class="modal-content">
         <div class="modal-header">
           <h3>{{ isEditing ? 'Edit Product' : 'Add Product' }}</h3>
-          <button @click="showModal = false" class="close-x">&times;</button>
+          <button @click="showModal = false" class="close-x-circle">&times;</button>
         </div>
         <div class="form-grid">
           <input v-model="brand" placeholder="Brand" />
@@ -251,8 +251,7 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 .drawer-enter-active { transition: all 0.2s cubic-bezier(0, 0, 0.2, 1); max-height: 200px; overflow: hidden; }
 .drawer-leave-active {transition: all 0.15s cubic-bezier(0.4, 0, 1, 1); max-height: 250px; overflow: hidden; }
 .drawer-enter-from, .drawer-leave-to { opacity: 0; max-height: 0; transform: translateY(-8px) scale(0.98); }
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; border-left: 4px solid #42b883; padding: 32px; width: 600px; }
+.modal-content { border-left: 4px solid #42b883; width: 600px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr 100px 100px; gap: 12px; margin: 20px 0; }
 input, select { background: #222; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 8px; }
 .btn-save { width: 100%; background: #42b883; color: #000; font-weight: 800; padding: 12px; border: none; border-radius: 8px; cursor: pointer; }

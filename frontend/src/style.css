@@ -32,3 +32,55 @@ button {
 button:hover {
   opacity: 0.8;
 }
+
+/* --- GLOBAL MODAL STYLES --- */
+.modal-overlay { 
+  position: fixed; 
+  inset: 0; 
+  background: rgba(0,0,0,0.8); 
+  backdrop-filter: blur(8px); 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  z-index: 1000; 
+}
+
+.modal-content { 
+  background: #1a1a1a; 
+  border: 1px solid #333; 
+  border-radius: 16px; 
+  padding: 40px 32px 32px 32px; 
+  position: relative; 
+  box-shadow: 0 20px 50px rgba(0,0,0,0.5); 
+}
+
+.modal-header { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+}
+
+.close-x-circle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  background: #ff4757; 
+  color: #fff; 
+  border: none;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: 0.2s;
+  padding: 0;
+}
+
+.close-x-circle:hover { 
+  background: #ff6b81; 
+  transform: scale(1.1); 
+}

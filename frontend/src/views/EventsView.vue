@@ -35,7 +35,7 @@ const fetchData = async () => {
   try {
     const [evRes, prodRes] = await Promise.all([
       fetch('http://127.0.0.1:8000/events/'),
-      fetch('http://127.0.0.1:8000/products/')
+      fetch('http://127.0.0.1:8000/products/with-stock')
     ])
     events.value = (await evRes.json()).events || []
     products.value = (await prodRes.json()).inventory || []
@@ -155,6 +155,23 @@ const deleteEvent = async (e) => {
   const url = `http://127.0.0.1:8000/events/?${queryParams.toString()}`
   try { if ((await fetch(url, { method: 'DELETE' })).ok) await fetchData() } catch (err) { console.error("Delete failed:", err) }
 }
+
+const isStockAvailable = computed(() => {
+  if (type.value !== 'Finished (-)') return true;
+  if (!selectedProduct.value || selectedProduct.value.stock_on_hand === undefined) return true;
+  return qty.value <= selectedProduct.value.stock_on_hand;
+});
+
+const stockErrorMessage = computed(() => {
+  if (!isStockAvailable.value && selectedProduct.value) {
+    return `Error: Only ${selectedProduct.value.stock_on_hand} units remaining in inventory.`;
+  }
+  return "";
+});
+
+// NEW: Future Date Validation
+const maxDateString = new Date().toISOString().split('T')[0];
+const isDateValid = computed(() => eventDate.value <= maxDateString);
 
 onMounted(fetchData)
 </script>
@@ -284,7 +301,7 @@ onMounted(fetchData)
             </div>
             <div class="input-group">
               <label>Date</label>
-              <input v-model="eventDate" type="date" />
+              <input v-model="eventDate" type="date" :max="maxDateString" />
             </div>
           </div>
 
@@ -299,7 +316,21 @@ onMounted(fetchData)
             </div>
           </div>
 
-          <button @click="saveEvent" class="btn-save">{{ isEditing ? 'Update Entry' : 'Log Entry' }}</button>
+          <transition name="fade">
+            <div v-if="!isStockAvailable || !isDateValid" class="stock-warning-box">
+              <span class="warning-icon">⚠️</span>
+              {{ !isDateValid ? "Error: Event date cannot be in the future." : stockErrorMessage }}
+            </div>
+          </transition>
+
+          <button 
+            @click="saveEvent" 
+            class="btn-save" 
+            :disabled="!isStockAvailable || !isDateValid"
+            :class="{ 'btn-disabled': !isStockAvailable || !isDateValid }"
+          >
+            {{ isEditing ? 'Update Entry' : 'Log Entry' }}
+          </button>
         </div>
       </div>
     </div>
@@ -399,4 +430,25 @@ input:focus, select:focus { border-color: #42b883; outline: none; background: #2
 .btn-edit, .btn-delete { padding: 6px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 .btn-edit { background: transparent; border: 1px solid #444; color: #888; }
 .btn-delete { background: #ff4757; color: #fff; border: none; }
+
+/* Notification styling [cite: 2026-03-04] */
+.stock-warning-box {
+  background: rgba(255, 71, 87, 0.1);
+  border: 1px solid #ff4757;
+  color: #ff4757;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.warning-icon { font-size: 1rem; }
+.btn-disabled { opacity: 0.4; cursor: not-allowed !important; filter: grayscale(1); }
+
+/* Transition [cite: 2026-03-04] */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

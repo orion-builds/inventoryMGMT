@@ -267,9 +267,13 @@ onMounted(fetchData)
                   <div class="role-name">{{ item.role_name }}</div>
                   <div class="item-daily-cost">S${{ item.daily_cost?.toFixed(2) }} <span class="per-day">/ day</span></div>
                 </div>
-                <div class="runout-meta">
-                  <div class="runout-info">{{ item.expected_restock }}</div>
+              <div class="runout-meta">
+                <div class="runout-info">{{ item.expected_restock }}</div>
+                <div class="wtp-info" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
+                  <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} 
+                  ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
                 </div>
+              </div>
               </div>
               
               <div class="card-graph-container">

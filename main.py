@@ -449,6 +449,24 @@ def delete_product(product_id: int):
 
     return {"message": f"Successfully deleted product {product_id}"}
 
+@app.get("/products/with-stock")
+def get_products_with_stock():
+    conn = sqlite3.connect("inventory.db")
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        # Calculates real-time stock explicitly for form validation UI
+        cursor.execute("""
+            SELECT p.*, 
+            COALESCE(SUM(CASE WHEN e.event_type IN ('Restock (+)', 'Init') THEN e.quantity ELSE -e.quantity END), 0) as stock_on_hand
+            FROM PRODUCT p
+            LEFT JOIN INVENTORY_EVENT e ON p.product_id = e.product_id
+            GROUP BY p.product_id
+        """)
+        return {"inventory": [dict(row) for row in cursor.fetchall()]}
+    finally:
+        conn.close()
+
 # --- GET ALL INVENTORY EVENTS ---
 @app.get("/events/")
 def get_events():
@@ -497,12 +515,30 @@ def log_event(event: InventoryEventCreate):
         role_id = context['role_id'] if context else None
         category_id = context['category_id'] if context else None
 
+        # --- NEW CONSTRAINT: Prevent Future Dates ---
+        from datetime import datetime # (Ensure this is imported at the top of your file)
+        if datetime.strptime(event.event_date, '%Y-%m-%d').date() > datetime.now().date():
+            raise HTTPException(status_code=400, detail="Event date cannot be in the future.")
+
         # 2. Capture baseline context BEFORE the new event [cite: 2026-03-03]
+        # FIX: Ensure 'Init' is counted as positive stock so it can be consumed [cite: 2026-03-04]
         cursor.execute("""
-            SELECT SUM(CASE WHEN event_type LIKE 'Restock%' THEN quantity ELSE -quantity END) as current_stock
+            SELECT SUM(CASE 
+                WHEN event_type LIKE 'Restock%' OR event_type = 'Init' THEN quantity 
+                ELSE -quantity 
+            END) as current_stock
             FROM INVENTORY_EVENT WHERE product_id = ?
         """, (event.product_id,))
-        stock_before = cursor.fetchone()['current_stock'] or 0
+        
+        res = cursor.fetchone()
+        stock_before = res['current_stock'] if res['current_stock'] is not None else 0.0
+        
+        # --- NEW CONSTRAINT: Prevent over-consumption [cite: 2026-03-04] ---
+        if event.event_type == 'Finished (-)' and event.quantity > stock_before:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient stock. You only have {stock_before} units remaining."
+            )
         
         # Calculate EMA baseline using existing cascade rules [cite: 2026-03-03]
         p_base = 0.0

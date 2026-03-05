@@ -376,10 +376,11 @@ td { padding: 6px 14px; border-bottom: 1px solid #222; vertical-align: middle; }
 .global-text { color: #555; font-size: 0.7rem; font-style: italic; text-transform: uppercase; letter-spacing: 0.5px; }
 
 /* Modal Styles [cite: 2026-03-04] */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; padding: 40px 32px 32px 32px; width: 500px; position: relative; }
-.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.close-x-circle { position: absolute; top: 16px; right: 16px; width: 28px; height: 28px; background: #ff4757; color: #fff; border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 1.1rem; font-weight: 700; }
+/* Inherits base modal styles from global CSS */
+.modal-content { 
+  width: 500px; /* Keeps the specific width for Roles modals */
+  border-left: 4px solid #42b883; /* Optional: Add this if you want the green border to match Categories/Products */
+}
 .form-body { display: flex; flex-direction: column; gap: 20px; }
 .form-row { display: flex; gap: 16px; }
 .input-group { flex: 1; display: flex; flex-direction: column; gap: 8px; }

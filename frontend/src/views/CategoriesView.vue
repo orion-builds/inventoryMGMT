@@ -134,7 +134,7 @@ onMounted(fetchCategories)
       <div class="modal-content">
         <div class="modal-header">
           <h3>{{ isEditing ? 'Edit Category' : 'Add Category' }}</h3>
-          <button @click="showModal = false" class="close-x">&times;</button>
+          <button @click="showModal = false" class="close-x-circle">&times;</button>
         </div>
         <div class="form-grid">
           <div class="input-group">
@@ -202,11 +202,15 @@ td { padding: 6px 14px; border-bottom: 1px solid #222; vertical-align: middle; }
 /* Edit/Delete & Modal [cite: 2026-03-03] */
 .btn-edit-icon { background: transparent; border: 1px solid #444; color: #888; padding: 6px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 .btn-delete-icon { background: #ff4757; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 16px; border-left: 4px solid #42b883; padding: 32px; width: 450px; }
+
+/* Inherits base modal styles from global CSS */
+.modal-content { 
+  border-left: 4px solid #42b883; 
+  width: 450px; 
+}
+
 .form-grid { display: grid; gap: 15px; }
 .input-group label { font-size: 0.7rem; text-transform: uppercase; color: #888; font-weight: bold; margin-bottom: 5px; display: block; }
 input { background: #222; border: 1px solid #333; color: white; padding: 10px; border-radius: 8px; width: 100%; }
 .btn-save { width: 100%; padding: 12px; background: #42b883; border: none; border-radius: 8px; color: #000; cursor: pointer; font-weight: 800; }
-.close-x { background: none; border: none; color: #888; font-size: 1.5rem; cursor: pointer; }
 </style>
