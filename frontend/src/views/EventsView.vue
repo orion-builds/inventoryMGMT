@@ -328,8 +328,6 @@ onMounted(fetchData)
 .header-actions { display: flex; gap: 12px; }
 
 /* Filter System */
-.btn-filter { background: transparent; border: 1px solid #444; color: #888; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
-.btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
 .filter-drawer { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 2rem; overflow: hidden; }
 .filter-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
 .filter-group { display: flex; flex-direction: column; gap: 6px; }
@@ -355,7 +353,6 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 /* Metrics & Badges */
 .unit-cost-cell { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .h-cell { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
-.h-val { color: #f1c40f; font-weight: bold; }
 .h-label { font-size: 0.6rem; color: #555; text-transform: uppercase; font-family: 'Inter', sans-serif; font-weight: 800; margin-left: 2px; }
 .badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; white-space: nowrap;}
 .badge.restocked { color: #42b883; background: rgba(66, 184, 131, 0.1); }
@@ -390,7 +387,6 @@ input:focus, select:focus { border-color: #42b883; outline: none; background: #2
 .text-red { color: #ff4757; }
 
 /* Buttons */
-.btn-toggle { background: #42b883; color: #000; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
 .btn-save { width: 100%; background: #42b883; color: #000; font-weight: 800; padding: 14px; border: none; border-radius: 8px; cursor: pointer; margin-top: 10px; }
 .action-buttons { opacity: 0; transition: 0.2s; display: flex; gap: 8px; justify-content: flex-end; }
 .event-row:hover .action-buttons { opacity: 1; }

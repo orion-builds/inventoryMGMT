@@ -209,10 +209,6 @@ onMounted(fetchProducts)
 .view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
 .header-actions { display: flex; gap: 12px; }
 
-/* Filter Drawer Styles */
-.btn-filter { background: transparent; border: 1px solid #444; color: #888; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
-
 .filter-drawer { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 2rem; }
 .filter-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-end; }
 .filter-group { display: flex; flex-direction: column; gap: 8px; }
@@ -243,7 +239,6 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 .action-buttons { opacity: 0; transition: 0.2s; display: flex; gap: 8px; justify-content: flex-end; }
 .product-row:hover .action-buttons { opacity: 1; }
 
-.btn-toggle { background: #42b883; color: #000; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
 .btn-edit { background: transparent; border: 1px solid #444; color: #888; padding: 5px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 .btn-delete { background: #ff4757; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; cursor: pointer; }
 

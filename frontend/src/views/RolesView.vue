@@ -20,6 +20,7 @@ const sortKey = ref('name'); const sortAsc = ref(true)
 const isEditingRole = ref(false); const currentRoleId = ref(null)
 const roleName = ref(''); const bufferDays = ref(7); const selectedCategory = ref('')
 const roleAlpha = ref(null)
+const rolePenalty = ref(null)
 const activeRoleForSwap = ref(null); const searchQuery = ref(''); const showDropdown = ref(false)
 const selectedProduct = ref(null); const startDate = ref(new Date().toISOString().split('T')[0])
 
@@ -45,6 +46,7 @@ const fetchData = async () => {
 const openCreateRole = () => {
   isEditingRole.value = false; currentRoleId.value = null
   roleName.value = ''; bufferDays.value = 7; selectedCategory.value = ''; roleAlpha.value = null
+  rolePenalty.value = null //
   showRoleModal.value = true
 }
 
@@ -52,13 +54,16 @@ const openEditRole = (role) => {
   isEditingRole.value = true; currentRoleId.value = role.role_id
   roleName.value = role.name; bufferDays.value = role.target_buffer_days
   selectedCategory.value = role.category_id; roleAlpha.value = role.ema_alpha
+  rolePenalty.value = role.holding_penalty !== null ? Number((role.holding_penalty * 100).toFixed(2)) : null
   showRoleModal.value = true
 }
 
 const saveRole = async () => {
   const payload = { 
     name: roleName.value, category_id: Number(selectedCategory.value), 
-    target_buffer_days: bufferDays.value, ema_alpha: roleAlpha.value === "" ? null : roleAlpha.value 
+    target_buffer_days: bufferDays.value,
+    ema_alpha: roleAlpha.value === "" ? null : roleAlpha.value,
+    holding_penalty: rolePenalty.value === null || rolePenalty.value === "" ? null : Number(rolePenalty.value) / 100
   }
   const url = isEditingRole.value ? `http://127.0.0.1:8000/roles/${currentRoleId.value}` : 'http://127.0.0.1:8000/roles/'
   try {
@@ -192,7 +197,8 @@ onMounted(fetchData)
             <th @click="sortBy('name')" class="sortable col-role">Name <span v-if="sortKey === 'name'">{{ sortAsc ? '▲' : '▼' }}</span></th>
             <th @click="sortBy('category_name')" class="sortable col-cat">Category <span v-if="sortKey === 'category_name'">{{ sortAsc ? '▲' : '▼' }}</span></th>
             <th @click="sortBy('target_buffer_days')" class="sortable col-buffer">Buffer <span v-if="sortKey === 'target_buffer_days'">{{ sortAsc ? '▲' : '▼' }}</span></th>
-            <th @click="sortBy('ema_alpha')" class="sortable col-alpha">Alpha <span v-if="sortKey === 'ema_alpha'">{{ sortAsc ? '▲' : '▼' }}</span></th>
+            <th @click="sortBy('ema_alpha')" class="sortable col-alpha-short">Alpha <span v-if="sortKey === 'ema_alpha'">{{ sortAsc ? '▲' : '▼' }}</span></th>
+            <th @click="sortBy('holding_penalty')" class="sortable col-penalty-left">Penalty <span v-if="sortKey === 'holding_penalty'">{{ sortAsc ? '▲' : '▼' }}</span></th>
             <th class="col-actions"></th>
           </tr>
         </thead>
@@ -215,6 +221,10 @@ onMounted(fetchData)
             <template v-else>
               <td>
                 <span v-if="role.ema_alpha !== null" class="alpha-text">{{ role.ema_alpha.toFixed(2) }}</span>
+                <span v-else class="global-text">Default</span>
+              </td>
+              <td>
+                <span v-if="role.holding_penalty !== null" class="penalty-text">{{ (role.holding_penalty * 100).toFixed(2) }}%</span>
                 <span v-else class="global-text">Default</span>
               </td>
               <td class="actions-cell">
@@ -257,6 +267,10 @@ onMounted(fetchData)
             <label>Alpha Override (Optional)</label>
             <input v-model.number="roleAlpha" type="number" step="0.01" placeholder="Leave blank for global default" />
           </div>
+          <div class="input-group">
+              <label>Penalty % / Day</label>
+              <input v-model.number="rolePenalty" type="number" step="0.01" placeholder="Global default" />
+          </div>
           <button @click="saveRole" class="btn-save">{{ isEditingRole ? 'Update Role' : 'Create Role' }}</button>
         </div>
       </div>
@@ -297,10 +311,6 @@ onMounted(fetchData)
 .view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
 .title-group { display: flex; align-items: center; gap: 24px; }
 .header-actions { display: flex; align-items: center; gap: 12px; }
-
-.btn-filter { background: transparent; border: 1px solid #444; color: #888; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
-.btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
-.btn-toggle { background: #42b883; color: #000 !important; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
 
 .filter-drawer { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 24px; margin-bottom: 2rem; overflow: hidden; }
 .filter-grid { display: flex; flex-direction: row; flex-wrap: wrap; gap: 32px; align-items: flex-end; }
@@ -391,4 +401,11 @@ input, select { background: #222; border: 1px solid #333; color: #fff; padding: 
 .results-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: #222; border: 1px solid #444; border-radius: 8px; z-index: 100; margin-top: 4px; overflow: hidden; }
 .result-item { padding: 12px; cursor: pointer; transition: 0.2s; }
 .result-item:hover { background: #333; }
+.col-penalty { width: 100px; text-align: center !important; }
+
+
+.col-penalty-left { 
+  width: 120px; 
+  text-align: left !important; 
+}
 </style>

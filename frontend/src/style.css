@@ -84,3 +84,49 @@ button:hover {
   background: #ff6b81; 
   transform: scale(1.1); 
 }
+
+/* Unified Header Buttons */
+.btn-filter, .btn-toggle { 
+  height: 35px;            /* Fixed height for absolute alignment */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;         /* Uniform horizontal breathing room */
+  border-radius: 8px;
+  font-size: 0.85rem;      
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-sizing: border-box;  /* Prevents padding from adding to height */
+}
+
+.btn-filter { 
+  background: transparent; 
+  border: 1px solid #444; 
+  color: #888; 
+  font-weight: 600;
+  gap: 8px;
+}
+
+.btn-filter:hover { border-color: #666; color: #eee; }
+.btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
+
+.btn-toggle { 
+  background: var(--primary-green); 
+  color: #000 !important; 
+  border: none;
+}
+
+.btn-toggle:hover { filter: brightness(1.1); }
+
+/* Standardized Yellow Data Text */
+.alpha-text, .penalty-text { 
+  color: #f1c40f; 
+  font-weight: 800; 
+  font-family: 'JetBrains Mono', monospace; 
+  font-size: 0.85rem;      /* Standardized to match category tags */
+}
+
+/* Global Table Utility Classes */
+.col-alpha-short { width: 70px; }
+.col-penalty-left { width: 120px; text-align: left !important; }

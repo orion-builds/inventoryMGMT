@@ -190,12 +190,7 @@ td { padding: 6px 14px; border-bottom: 1px solid #222; vertical-align: middle; }
 .action-buttons { opacity: 0; transition: 0.2s; display: flex; gap: 8px; justify-content: flex-end; }
 .unified-row:hover .action-buttons { opacity: 1; }
 
-.btn-filter { background: transparent; border: 1px solid #444; color: #888; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
-.btn-filter.active { background: #34495e; border-color: #42b883; color: #fff; }
-.btn-toggle { background: #42b883; color: #000 !important; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 800; cursor: pointer; }
-
 /* Text Logic [cite: 2026-03-03] */
-.alpha-text { color: #f1c40f; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
 .global-text { color: #555; font-size: 0.7rem; font-style: italic; text-transform: uppercase; letter-spacing: 0.5px; }
 .mono-text { font-family: 'JetBrains Mono', monospace; color: #555; font-size: 0.85rem; }
 

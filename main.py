@@ -48,12 +48,14 @@ class RoleCreate(BaseModel):
     target_buffer_days: int
     category_id: int
     ema_alpha: Optional[float] = None
+    holding_penalty: Optional[float] = None
 
 class RoleUpdate(BaseModel):
     name: Optional[str] = None
     target_buffer_days: Optional[int] = None
     category_id: Optional[int] = None
     ema_alpha: Optional[float] = None
+    holding_penalty: Optional[float] = None
 
 class RoleHistoryCreate(BaseModel):
     role_id: int
@@ -128,16 +130,18 @@ def update_learned_habit(cursor, role_id):
         WHERE role_id = ?
     """, (role_id,))
     role = cursor.fetchone()
+    if not role: return
+
+    # 2. Fetch Global Fallbacks from SETTINGS [cite: 2026-03-03]
+    cursor.execute("SELECT key, value FROM SETTINGS WHERE key IN ('global_ema_alpha', 'default_holding_penalty')")
+    settings = {row['key']: float(row['value']) for row in cursor.fetchall()}
     
-    if not role:
-        return
-
-    # Default learning rate (alpha) is 0.3 if not overridden
-    alpha = role['ema_alpha'] if role['ema_alpha'] is not None else 0.3
+    # Cascade logic: Role Override -> Global Setting -> Hardcoded Default
+    alpha = role['ema_alpha'] if role['ema_alpha'] is not None else settings.get('global_ema_alpha', 0.3)
     old_buffer = role['target_buffer_days'] if role['target_buffer_days'] is not None else 7
-    old_penalty = role['holding_penalty'] if role['holding_penalty'] is not None else 0.002
+    old_penalty = role['holding_penalty'] if role['holding_penalty'] is not None else settings.get('default_holding_penalty', 0.015)
 
-    # 2. Fetch the most recent restock event for this role to learn from
+    # 3. Fetch the most recent restock event context
     cursor.execute("""
         SELECT stock_before_event, implied_h 
         FROM INVENTORY_EVENT 
@@ -145,40 +149,35 @@ def update_learned_habit(cursor, role_id):
         ORDER BY event_date DESC, event_id DESC LIMIT 1
     """, (role_id,))
     latest_event = cursor.fetchone()
-    
-    if not latest_event:
-        return
+    if not latest_event: return
         
     new_buffer_rounded = old_buffer
     new_penalty = old_penalty
     
-    # 3. Feedback Loop A: Target Buffer
+    # 4. Feedback Loop A: Target Buffer (Learned Habit) [cite: 2026-03-05]
     if latest_event['stock_before_event'] is not None:
         actual_runway = latest_event['stock_before_event']
-        # Blend the actual behavior with the old rule
         new_buffer = (alpha * actual_runway) + ((1 - alpha) * old_buffer)
-        new_buffer_rounded = max(0, int(round(new_buffer))) # Ensure a clean, positive integer
+        new_buffer_rounded = max(0, int(round(new_buffer)))
         
-    # 4. Feedback Loop B: Holding Penalty (h)
+    # 5. Feedback Loop B: Holding Penalty (Revealed Preference) [cite: 2026-03-05]
     if latest_event['implied_h'] is not None:
-        # Note: implied_h is stored as a percentage (e.g., 0.5 for 0.5%). 
-        # We must divide by 100 to blend it with the decimal holding_penalty (0.005)
+        # actual_h is the penalty you actually accepted by buying early
         actual_h_decimal = latest_event['implied_h'] / 100.0
         
-        # Blend the actual penalty with the old rule
+        # EMA: Blend the accepted penalty with the current baseline [cite: 2026-01-08]
         new_penalty = (alpha * actual_h_decimal) + ((1 - alpha) * old_penalty)
         
-        # Guardrail: Keep the penalty within a sane economic range (0.01% to 5% per day)
+        # Guardrail: Ensure penalty stays between 0.01% and 5% per day [cite: 2026-03-05]
         new_penalty = max(0.0001, min(new_penalty, 0.05))
 
-    # 5. Commit the updated habits back to the Role
+    # 6. Commit the habit updates to the Role
     cursor.execute("""
         UPDATE ROLE 
         SET target_buffer_days = ?,
             holding_penalty = ?
         WHERE role_id = ?
     """, (new_buffer_rounded, new_penalty, role_id))
-
 @app.get("/dashboard/forecast")
 def get_restock_forecast():
     conn = sqlite3.connect("inventory.db")
@@ -829,11 +828,11 @@ def create_role(role: RoleCreate):
     cursor.execute("PRAGMA foreign_keys = ON;")
     
     try:
-        # Include ema_alpha in the insertion
+        # Include holding_penalty in the insertion
         cursor.execute("""
-            INSERT INTO ROLE (name, target_buffer_days, category_id, ema_alpha)
-            VALUES (?, ?, ?, ?)
-        """, (role.name, role.target_buffer_days, role.category_id, role.ema_alpha))
+            INSERT INTO ROLE (name, target_buffer_days, category_id, ema_alpha, holding_penalty)
+            VALUES (?, ?, ?, ?, ?)
+        """, (role.name, role.target_buffer_days, role.category_id, role.ema_alpha, role.holding_penalty))
         
         conn.commit()
         new_id = cursor.lastrowid
@@ -867,9 +866,12 @@ def update_role(role_id: int, role_data: RoleUpdate):
         if role_data.category_id is not None:
             update_fields.append("category_id = ?")
             params.append(role_data.category_id)
-        if role_data.ema_alpha is not None: # New field logic
+        if role_data.ema_alpha is not None: 
             update_fields.append("ema_alpha = ?")
             params.append(role_data.ema_alpha)
+        if role_data.holding_penalty is not None: # <-- NEW LOGIC FOR OVERRIDE
+            update_fields.append("holding_penalty = ?")
+            params.append(role_data.holding_penalty)
             
         if not update_fields:
             raise HTTPException(status_code=400, detail="No fields provided for update")
