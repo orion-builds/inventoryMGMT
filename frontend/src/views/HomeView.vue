@@ -203,8 +203,15 @@ onMounted(fetchData)
             
             <div class="runout-meta">
               <div class="runout-info">{{ item.expected_restock }}</div>
-              <div class="wtp-info" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
-                <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
+              <div class="wtp-tooltip-container" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
+                <div class="wtp-info">
+                  <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
+                </div>
+                <div class="wtp-breakdown-card">
+                  <div class="bd-row"><span class="bd-label">BASE PRICE</span><span class="bd-val">S${{ item.ema_unit_cost?.toFixed(2) }}</span></div>
+                  <div class="bd-row"><span class="bd-label">BUFFER</span><span class="bd-val">{{ item.target_buffer_days || 7 }}d</span></div>
+                  <div class="bd-row"><span class="bd-label">PENALTY</span><span class="bd-val">{{ ((item.holding_penalty || 0.015) * 100).toFixed(2) }}%/d</span></div>
+                </div>
               </div>
             </div>
           </div>
@@ -267,13 +274,19 @@ onMounted(fetchData)
                   <div class="role-name">{{ item.role_name }}</div>
                   <div class="item-daily-cost">S${{ item.daily_cost?.toFixed(2) }} <span class="per-day">/ day</span></div>
                 </div>
-              <div class="runout-meta">
-                <div class="runout-info">{{ item.expected_restock }}</div>
-                <div class="wtp-info" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
-                  <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} 
-                  ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
+            <div class="runout-meta">
+              <div class="runout-info">{{ item.expected_restock }}</div>
+              <div class="wtp-tooltip-container" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
+                <div class="wtp-info">
+                  <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
+                </div>
+                <div class="wtp-breakdown-card">
+                  <div class="bd-row"><span class="bd-label">BASE PRICE</span><span class="bd-val">S${{ item.ema_unit_cost?.toFixed(2) }}</span></div>
+                  <div class="bd-row"><span class="bd-label">BUFFER</span><span class="bd-val">{{ item.target_buffer_days || 7 }}d</span></div>
+                  <div class="bd-row"><span class="bd-label">PENALTY</span><span class="bd-val">{{ ((item.holding_penalty || 0.015) * 100).toFixed(2) }}%/d</span></div>
                 </div>
               </div>
+            </div>
               </div>
               
               <div class="card-graph-container">
@@ -393,4 +406,32 @@ onMounted(fetchData)
 .grey-text { color: #555 !important; border-color: #333 !important; }
 /* Blue styling for initialization data points [cite: 2026-03-04] */
 .node-init { fill: #3498db !important; }
+/* WTP Breakdown Tooltip System */
+.wtp-tooltip-container { position: relative; cursor: help; }
+.wtp-breakdown-card {
+  position: absolute;
+  bottom: 120%; /* Floats directly above the WTP text */
+  right: 0;
+  width: 140px;
+  background: #222;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 10px;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: translateY(4px) scale(0.98);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.4);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wtp-tooltip-container:hover .wtp-breakdown-card {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.bd-row { display: flex; justify-content: space-between; align-items: baseline; }
+.bd-label { font-size: 0.55rem; font-weight: 800; color: #666; font-family: 'Inter', sans-serif; letter-spacing: 0.5px; }
+.bd-val { font-size: 0.75rem; font-weight: 700; color: #eee; font-family: 'JetBrains Mono', monospace; }
 </style>
