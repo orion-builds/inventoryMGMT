@@ -8,9 +8,12 @@
       <router-link to="/categories">Categories</router-link>
     </nav>
 
-    <div class="settings-wrapper">
-      <router-link to="/settings" class="settings-btn" title="System Settings">
-        <span class="gear-icon">⚙️</span>
+    <div class="action-icons">
+      <router-link to="/help" class="icon-btn" title="Help & Mechanics">
+        <span>❔</span>
+      </router-link>
+      <router-link to="/settings" class="icon-btn settings-btn" title="System Settings">
+        <span>⚙️</span>
       </router-link>
     </div>
   </header>
@@ -44,15 +47,18 @@ body { background-color: #1a1a1a; color: #eee; font-family: 'Inter', sans-serif;
   padding-bottom: 5px; 
 }
 
-/* Positioning the settings icon */
-.settings-wrapper { 
+/* Positioning the right-side icons */
+.action-icons { 
   position: absolute; 
   top: 50%; 
   right: 25px; 
   transform: translateY(-50%); 
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
-.settings-btn {
+.icon-btn {
   text-decoration: none;
   font-size: 1.4rem;
   opacity: 0.6;
@@ -60,13 +66,17 @@ body { background-color: #1a1a1a; color: #eee; font-family: 'Inter', sans-serif;
   display: block;
 }
 
-.settings-btn:hover { 
+.icon-btn:hover { 
   opacity: 1; 
-  transform: rotate(45deg); /* Subtle feedback */
 }
 
-/* Ensure active state shows green icon [cite: 2026-03-03] */
-.settings-btn.router-link-active { 
+/* Keep the spin specifically for the gear */
+.settings-btn:hover {
+  transform: rotate(45deg); 
+}
+
+/* Ensure active state shows green icon */
+.icon-btn.router-link-active { 
   opacity: 1; 
   filter: drop-shadow(0 0 5px var(--primary-green));
 }
