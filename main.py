@@ -5,6 +5,7 @@ from pydantic import BaseModel # comes with fastapi pip
 from typing import Optional
 import sqlite3
 import math
+import traceback
 
 app = FastAPI()
 
@@ -37,7 +38,7 @@ class InventoryEventCreate(BaseModel):
     event_type: str         # e.g., "opened", "finished", "restocked"
     event_date: str         # e.g., "2026-03-02"
     cost_sgd: Optional[float] = None
-    quantity: int           # e.g., 1 (for one tub) or -1 (if you throw one away)
+    quantity: float           # e.g., 1 (for one tub) or -1 (if you throw one away)
 
 class CategoryCreate(BaseModel):
     name: str
@@ -80,7 +81,7 @@ class CategoryUpdate(BaseModel):
 class EventUpdate(BaseModel):
     new_event_type: Optional[str] = None
     new_event_date: Optional[str] = None
-    quantity: Optional[int] = None
+    quantity: Optional[float] = None
     cost_sgd: Optional[float] = None
 
 def get_ema_alpha(cursor, role_id, category_id):
@@ -491,11 +492,12 @@ def log_event(event: InventoryEventCreate):
     conn = sqlite3.connect("inventory.db")
     conn.row_factory = sqlite3.Row 
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;")
     
     try:
-        # 1. Fetch Role, Category, and Target Buffer context 
-        # (Updated to also grab r.target_buffer_days in one swift query)
+        # --- NEW: Immediate Data Log for Debugging ---
+        print(f"DEBUG: Receiving event for Product {event.product_id}: {event.event_type} on {event.event_date}")
+
+        # 1. Fetch Context
         cursor.execute("""
             SELECT r.role_id, r.category_id, r.target_buffer_days
             FROM ROLE_HISTORY rh
@@ -504,73 +506,42 @@ def log_event(event: InventoryEventCreate):
         """, (event.product_id,))
         context = cursor.fetchone()
         
-        role_id = context['role_id'] if context else None
-        category_id = context['category_id'] if context else None
-        buffer_days = context['target_buffer_days'] if context and context['target_buffer_days'] is not None else 7
+        # If this fails, it's likely a missing Role History entry
+        if not context:
+            raise ValueError(f"No active Role found for Product {event.product_id}. Check ROLE_HISTORY table.")
 
-        # --- NEW CONSTRAINT: Prevent Future Dates ---
-        from datetime import datetime 
-        if datetime.strptime(event.event_date, '%Y-%m-%d').date() > datetime.now().date():
-            raise HTTPException(status_code=400, detail="Event date cannot be in the future.")
+        role_id = context['role_id']
+        category_id = context['category_id']
+        buffer_days = context['target_buffer_days'] or 7
 
-        # 2. Capture baseline context BEFORE the new event 
-        cursor.execute("""
-            SELECT SUM(CASE 
-                WHEN event_type LIKE 'Restock%' OR event_type = 'Init' THEN quantity 
-                ELSE -quantity 
-            END) as current_stock
-            FROM INVENTORY_EVENT WHERE product_id = ?
-        """, (event.product_id,))
+        # 2. Logic & Math
+        p_base = get_current_ema_for_product(cursor, event.product_id, role_id, category_id)
         
-        res = cursor.fetchone()
-        stock_before = res['current_stock'] if res['current_stock'] is not None else 0.0
-        
-        # --- NEW CONSTRAINT: Prevent over-consumption ---
-        if event.event_type == 'Finished (-)' and event.quantity > stock_before:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Insufficient stock. You only have {stock_before} units remaining."
-            )
-        
-        # Calculate EMA baseline using existing cascade rules 
-        p_base = 0.0
-        if role_id and category_id:
-            p_base = get_current_ema_for_product(cursor, event.product_id, role_id, category_id)
+        # Log EMA to see if it's returning None/Null
+        print(f"DEBUG: Calculated p_base: {p_base}")
 
-        # --- NEW: Calculate Implied Holding Penalty (h) ---
-        implied_h = None
-        if 'Restock' in event.event_type and event.cost_sgd and event.quantity and p_base > 0:
-            p_deal = event.cost_sgd / event.quantity
-            excess_days = max(0, stock_before - buffer_days)
-            
-            # Guardrail: Only calculate if bought early AND at a discount
-            if excess_days > 0 and p_deal < p_base:
-                # Store it as a percentage to match your frontend formatting
-                implied_h = (1 - (p_deal / p_base) ** (1 / excess_days)) * 100
-
-        # 3. Insert the Event with Snapshot (Now including implied_h)
+        # ... (Your existing insertion logic) ...
         cursor.execute("""
             INSERT INTO INVENTORY_EVENT 
-            (product_id, role_id, event_type, event_date, cost_sgd, quantity, unit_cost, stock_before_event, implied_h)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (product_id, role_id, event_type, event_date, cost_sgd, quantity, unit_cost, stock_before_event)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (event.product_id, role_id, event.event_type, event.event_date, 
-              event.cost_sgd, event.quantity, p_base, stock_before, implied_h))
-        
-        # 4. Trigger the Feedback Loop
-        # We learn on Restocks (WTP/Penalty) AND on Finishes (Usage/Buffer)
-        if role_id and ("Restock" in event.event_type or "Finished" in event.event_type):
-            update_learned_habit(cursor, role_id)
+              event.cost_sgd, event.quantity, p_base, 0.0))
         
         conn.commit()
+        return {"message": "Success"}
+
+    except Exception as e:
+        # --- THIS IS THE KEY: Print the exact line number and error to terminal ---
+        error_trace = traceback.format_exc()
+        print("❌ CRITICAL ERROR IN LOG_EVENT:")
+        print(error_trace)
         
-    except sqlite3.IntegrityError as e:
-        raise HTTPException(status_code=400, detail=f"Data integrity error: {str(e)}")
-    except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Send the actual error back to the frontend so you can read it
+        raise HTTPException(status_code=500, detail=f"Internal Crash: {str(e)}")
+    
     finally:
         conn.close()
-
-    return {"message": "Inventory event logged and habit updated."}
 
 @app.patch("/events/")
 def update_event(product_id: int, event_type: str, event_date: str, event_data: EventUpdate):

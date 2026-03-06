@@ -139,7 +139,7 @@ onMounted(fetchCategories)
         <div class="form-grid">
           <div class="input-group">
             <label>Category Name</label>
-            <input v-model="categoryName" placeholder="e.g. Cleansers, Serums..." />
+            <input v-model="categoryName" placeholder="e.g. Skincare, Household..." />
           </div>
           <div class="input-group">
             <label>EMA Alpha Override (0.0 - 1.0)</label>
