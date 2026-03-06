@@ -220,7 +220,7 @@ onMounted(fetchData)
             </td>
             <td>{{ e.quantity }}</td>
             <td>{{ e.cost_sgd ? `S$${e.cost_sgd.toFixed(2)}` : '-' }}</td>
-            <td class="unit-cost-cell">{{ e.cost_sgd ? `S$${e.unit_cost_display.toFixed(2)}` : '-' }}</td>
+            <td class="">{{ e.cost_sgd ? `S$${e.unit_cost_display.toFixed(2)}` : '-' }}</td>
             <td class="h-cell">
               <template v-if="typeof e.implied_h === 'number'">
                 <span class="h-val">{{ e.implied_h.toFixed(1) }}%</span>
@@ -351,7 +351,6 @@ td { padding: 14px; border-bottom: 1px solid #222; }
 .bold { font-weight: bold; }
 
 /* Metrics & Badges */
-.unit-cost-cell { color: #888; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .h-cell { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 .h-label { font-size: 0.6rem; color: #555; text-transform: uppercase; font-family: 'Inter', sans-serif; font-weight: 800; margin-left: 2px; }
 .badge { padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; white-space: nowrap;}

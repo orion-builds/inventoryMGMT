@@ -215,30 +215,49 @@ onMounted(fetchData)
               </div>
             </div>
           </div>
-          
-          <div class="card-graph-container">
-            <svg v-if="getGraphData(item)" viewBox="0 0 240 80" preserveAspectRatio="none" class="sparkline">
-              <line class="zero-baseline" x1="0" y1="80" x2="240" y2="80" />
-              <polygon v-if="item.status === 'Calculated'" class="confidence-fan" :points="getGraphData(item).fanPoints" />
-              <polyline fill="none" stroke="#42b883" stroke-width="2.5" :points="getGraphData(item).polyline" />
-              
-              <line v-if="item.status === 'Calculated'" stroke="#42b883" stroke-width="2.5" :x1="getGraphData(item).lastX" :y1="getGraphData(item).lastY" :x2="getGraphData(item).nowX" :y2="getGraphData(item).nowY" />
-              
-              <line v-if="item.status === 'Calculated'" class="projection-line" :x1="getGraphData(item).nowX" :y1="getGraphData(item).nowY" :x2="getGraphData(item).expectedX" y2="80" />
-              
-              <svg v-for="(dot, idx) in getGraphData(item).eventDots" :key="idx" :x="dot.x - 5" :y="dot.y - 5" width="10" height="10" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
-                  <circle cx="5" cy="5" r="4.5" :class="['node', { 'node-init': dot.type === 'Init' }]" @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }" @mouseleave="activePopup = null" />
+            <div class="card-graph-container">
+              <svg v-if="getGraphData(item)" viewBox="0 0 240 80" preserveAspectRatio="none" class="sparkline">
+                <line class="zero-baseline" x1="0" y1="80" x2="240" y2="80" />
+                <polygon v-if="item.status === 'Calculated'" class="confidence-fan" :points="getGraphData(item).fanPoints" />
+                <polyline fill="none" stroke="#42b883" stroke-width="2.5" :points="getGraphData(item).polyline" />
+                
+                <line v-if="item.status === 'Calculated'" stroke="#42b883" stroke-width="2.5"
+                  :x1="getGraphData(item).lastX" :y1="getGraphData(item).lastY"
+                  :x2="getGraphData(item).nowX" :y2="getGraphData(item).nowY" />
+                
+                <line v-if="item.status === 'Calculated'" class="projection-line"
+                  :x1="getGraphData(item).nowX" :y1="getGraphData(item).nowY"
+                  :x2="getGraphData(item).expectedX" y2="80" />
               </svg>
 
-              <svg v-if="item.status === 'Calculated'" :x="getGraphData(item).expectedX - 6" y="74" width="12" height="12" viewBox="0 0 12 12" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
-                <circle cx="6" cy="6" r="5" class="node runout-node" @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }" @mouseleave="activePopup = null" />
-              </svg>
-            </svg>
-            <div v-if="activePopup?.id.startsWith(item.role_id)" class="graph-tooltip" :style="{ left: (activePopup.x / 240 * 100) + '%', top: (activePopup.y / 80 * 100) + '%' }">
-              <div class="tt-date">{{ activePopup.date }}</div>
-              <div class="tt-info">{{ activePopup.label }}</div>
-            </div>
-          </div>
+              <!-- Node overlays -->
+              <div
+                v-for="(dot, idx) in getGraphData(item)?.eventDots || []"
+                :key="idx"
+                class="node-overlay"
+                :class="{ 'init-node': dot.type === 'Init' }"
+                :style="{
+                  left: (dot.x / 240 * 100) + '%',
+                  top: (dot.y / 80 * 100) + '%'
+                }"
+                @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }"
+                @mouseleave="activePopup = null"
+              ></div>
+
+              <div v-if="item.status === 'Calculated'" class="node-overlay runout-node"
+                :style="{ left: (getGraphData(item).expectedX / 240 * 100) + '%', top: '100%' }"
+                @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }"
+                @mouseleave="activePopup = null"
+              ></div>
+
+              <!-- Tooltip -->
+              <div v-if="activePopup?.id.startsWith(item.role_id)" class="graph-tooltip"
+                :style="{ left: (activePopup.x / 240 * 100) + '%', top: (activePopup.y / 80 * 100) + '%' }">
+                <div class="tt-date">{{ activePopup.date }}</div>
+                <div class="tt-info">{{ activePopup.label }}</div>
+              </div>
+            </div>          
+
         </div>
       </div>
 
@@ -274,37 +293,58 @@ onMounted(fetchData)
                   <div class="role-name">{{ item.role_name }}</div>
                   <div class="item-daily-cost">S${{ item.daily_cost?.toFixed(2) }} <span class="per-day">/ day</span></div>
                 </div>
-            <div class="runout-meta">
-              <div class="runout-info">{{ item.expected_restock }}</div>
-              <div class="wtp-tooltip-container" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
-                <div class="wtp-info">
-                  <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
-                </div>
-                <div class="wtp-breakdown-card">
-                  <div class="bd-row"><span class="bd-label">BASE PRICE</span><span class="bd-val">S${{ item.ema_unit_cost?.toFixed(2) }}</span></div>
-                  <div class="bd-row"><span class="bd-label">BUFFER</span><span class="bd-val">{{ item.target_buffer_days || 7 }}d</span></div>
-                  <div class="bd-row"><span class="bd-label">PENALTY</span><span class="bd-val">{{ ((item.holding_penalty || 0.015) * 100).toFixed(2) }}%/d</span></div>
+                <div class="runout-meta">
+                  <div class="runout-info">{{ item.expected_restock }}</div>
+                  <div class="wtp-tooltip-container" v-if="item.status === 'Calculated' && item.ema_unit_cost > 0">
+                    <div class="wtp-info">
+                      <span class="wtp-label">WTP </span>S${{ item.target_deal_price?.toFixed(2) }} ({{ Math.round((item.target_deal_price / item.ema_unit_cost) * 100) }}%)
+                    </div>
+                    <div class="wtp-breakdown-card">
+                      <div class="bd-row"><span class="bd-label">BASE PRICE</span><span class="bd-val">S${{ item.ema_unit_cost?.toFixed(2) }}</span></div>
+                      <div class="bd-row"><span class="bd-label">BUFFER</span><span class="bd-val">{{ item.target_buffer_days || 7 }}d</span></div>
+                      <div class="bd-row"><span class="bd-label">PENALTY</span><span class="bd-val">{{ ((item.holding_penalty || 0.015) * 100).toFixed(2) }}%/d</span></div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-              </div>
-              
               <div class="card-graph-container">
                 <svg v-if="getGraphData(item)" viewBox="0 0 240 80" preserveAspectRatio="none" class="sparkline">
                   <line class="zero-baseline" x1="0" y1="80" x2="240" y2="80" />
                   <polygon v-if="item.status === 'Calculated'" class="confidence-fan" :points="getGraphData(item).fanPoints" />
                   <polyline fill="none" stroke="#42b883" stroke-width="2.5" :points="getGraphData(item).polyline" />
-                  <line v-if="item.status === 'Calculated'" class="projection-line" :x1="getGraphData(item).nowX" :y1="getGraphData(item).nowY" :x2="getGraphData(item).expectedX" y2="80" />
                   
-                  <svg v-for="(dot, idx) in getGraphData(item).eventDots" :key="idx" :x="dot.x - 5" :y="dot.y - 5" width="10" height="10" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
-                    <circle cx="5" cy="5" r="4.5" :class="['node', { 'node-init': dot.type === 'Init' }]" @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }" @mouseleave="activePopup = null" />
-                  </svg>
+                  <line v-if="item.status === 'Calculated'" stroke="#42b883" stroke-width="2.5"
+                    :x1="getGraphData(item).lastX" :y1="getGraphData(item).lastY"
+                    :x2="getGraphData(item).nowX" :y2="getGraphData(item).nowY" />
                   
-                  <svg v-if="item.status === 'Calculated'" :x="getGraphData(item).expectedX - 6" y="74" width="12" height="12" viewBox="0 0 12 12" preserveAspectRatio="xMidYMid meet" class="node-wrapper">
-                    <circle cx="6" cy="6" r="5" class="node runout-node" @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }" @mouseleave="activePopup = null" />
-                  </svg>
+                  <line v-if="item.status === 'Calculated'" class="projection-line"
+                    :x1="getGraphData(item).nowX" :y1="getGraphData(item).nowY"
+                    :x2="getGraphData(item).expectedX" y2="80" />
                 </svg>
-                <div v-if="activePopup?.id.startsWith(item.role_id)" class="graph-tooltip" :style="{ left: (activePopup.x / 240 * 100) + '%', top: (activePopup.y / 80 * 100) + '%' }">
+
+                <!-- Node overlays -->
+                <div
+                  v-for="(dot, idx) in getGraphData(item)?.eventDots || []"
+                  :key="idx"
+                  class="node-overlay"
+                  :class="{ 'init-node': dot.type === 'Init' }"
+                  :style="{
+                    left: (dot.x / 240 * 100) + '%',
+                    top: (dot.y / 80 * 100) + '%'
+                  }"
+                  @mouseenter="activePopup = { id: item.role_id + '-' + idx, ...dot }"
+                  @mouseleave="activePopup = null"
+                ></div>
+
+                <div v-if="item.status === 'Calculated'" class="node-overlay runout-node"
+                  :style="{ left: (getGraphData(item).expectedX / 240 * 100) + '%', top: '100%' }"
+                  @mouseenter="activePopup = { id: item.role_id + '-runout', label: 'Runout Expected', date: item.expected_restock, x: getGraphData(item).expectedX, y: 80 }"
+                  @mouseleave="activePopup = null"
+                ></div>
+
+                <!-- Tooltip -->
+                <div v-if="activePopup?.id.startsWith(item.role_id)" class="graph-tooltip"
+                  :style="{ left: (activePopup.x / 240 * 100) + '%', top: (activePopup.y / 80 * 100) + '%' }">
                   <div class="tt-date">{{ activePopup.date }}</div>
                   <div class="tt-info">{{ activePopup.label }}</div>
                 </div>
@@ -325,10 +365,7 @@ onMounted(fetchData)
 .search-section { margin-bottom: 2.5rem; }
 .search-input-wrapper { position: relative; max-width: 500px; }
 .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); opacity: 0.5; }
-.dashboard-search { 
-  width: 100%; background: #121212; border: 1px solid #333; border-radius: 30px; 
-  padding: 12px 20px 12px 45px; color: #eee; font-size: 0.9rem; transition: border-color 0.2s;
-}
+.dashboard-search { width: 100%; background: #121212; border: 1px solid #333; border-radius: 30px; padding: 12px 20px 12px 45px; color: #eee; font-size: 0.9rem; transition: border-color 0.2s; }
 .dashboard-search:focus { border-color: #42b883; outline: none; background: #1a1a1a; }
 
 /* Financial Header Styling */
@@ -393,10 +430,12 @@ onMounted(fetchData)
 .projection-line { stroke: #42b883; stroke-width: 2; stroke-dasharray: 6; opacity: 0.4; }
 .zero-baseline { stroke: #ff4757; stroke-width: 1; opacity: 0.2; }
 
-/* Fixed Node Logic */
+/* Fixed Node Logic - node overlays are fixed size circles, unaffected by graph stretching */
+.node-overlay { position: absolute; width: 9px; height: 9px; border-radius: 50%; background-color: #42b883; transform: translate(-50%, -50%); cursor: pointer; transition: transform 0.2s, background-color 0.2s; }
+.node-overlay:hover { transform: translate(-50%, -50%) scale(1.4); background-color: #fff; }
 .node-wrapper { overflow: visible; }
-.node { fill: #42b883; stroke: #000; cursor: pointer; transition: r 0.2s; vector-effect: non-scaling-stroke; }
-.runout-node { fill: #ff4757; }
+.runout-node { background-color: #ff4757 !important; vector-effect: non-scaling-stroke; }
+.init-node { background-color: #3498db !important; }
 .node:hover { r: 6; fill: #fff; }
 
 .graph-tooltip { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: #1a1a1a; border: 1px solid #42b883; padding: 8px 12px; border-radius: 6px; color: #fff; font-size: 0.7rem; text-align: center; white-space: nowrap; z-index: 100; box-shadow: 0 8px 20px rgba(0,0,0,0.5); pointer-events: none; }
@@ -404,34 +443,16 @@ onMounted(fetchData)
 .tt-info { font-weight: 700; color: #42b883; }
 .status-unknown { color: #555 !important; }
 .grey-text { color: #555 !important; border-color: #333 !important; }
-/* Blue styling for initialization data points [cite: 2026-03-04] */
-.node-init { fill: #3498db !important; }
+
 /* WTP Breakdown Tooltip System */
 .wtp-tooltip-container { position: relative; cursor: help; }
-.wtp-breakdown-card {
-  position: absolute;
-  bottom: 120%; /* Floats directly above the WTP text */
-  right: 0;
-  width: 140px;
-  background: #222;
-  border: 1px solid #444;
-  border-radius: 8px;
-  padding: 10px;
-  opacity: 0;
-  pointer-events: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  transform: translateY(4px) scale(0.98);
-  box-shadow: 0 10px 20px rgba(0,0,0,0.4);
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wtp-tooltip-container:hover .wtp-breakdown-card {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
+.wtp-breakdown-card { position: absolute; bottom: 120%; right: 0; width: 140px; background: #222; border: 1px solid #444; border-radius: 8px; padding: 10px; opacity: 0; pointer-events: none; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); transform: translateY(4px) scale(0.98); box-shadow: 0 10px 20px rgba(0,0,0,0.4); z-index: 50; display: flex; flex-direction: column; gap: 6px; }
+.wtp-tooltip-container:hover .wtp-breakdown-card { opacity: 1; transform: translateY(0) scale(1); }
 .bd-row { display: flex; justify-content: space-between; align-items: baseline; }
 .bd-label { font-size: 0.55rem; font-weight: 800; color: #666; font-family: 'Inter', sans-serif; letter-spacing: 0.5px; }
 .bd-val { font-size: 0.75rem; font-weight: 700; color: #eee; font-family: 'JetBrains Mono', monospace; }
+
+.card-graph-container { position: relative; height: 80px; aspect-ratio: 3/1; }
+.sparkline { width: 100%; height: 100%; overflow: visible; }
+
 </style>
