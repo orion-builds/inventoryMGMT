@@ -1,0 +1,22 @@
+# docker-compose.yml
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # These lines map your physical data straight into the container's /app folder
+      - ./data:/app/data
+      - ./users.db:/app/users.db
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      # Maps local port 5173 to Nginx port 80
+      - "5173:80"
+    restart: unless-stopped
+    depends_on:
+      - backend

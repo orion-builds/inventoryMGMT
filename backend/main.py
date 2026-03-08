@@ -360,9 +360,7 @@ def get_restock_forecast(current_user: str = Depends(get_current_user)):
                     "daily_cost": round(daily_cost, 2), 
                     "stock_on_hand": valid_stock, "history": history_points,
                     "status": "Calculated", "target_deal_price": round(target_deal, 2),
-                    "ema_unit_cost": round(ema_unit_cost, 2),
-                    "daily_usage_rate": burn_rate,
-                    "last_event_date": history_points[-1]['date'] if history_points else role['start_date']
+                    "ema_unit_cost": round(ema_unit_cost, 2)
                 })
             else:
                 # Disqualifies single-event depletions (The Dettol/Whey Fix)
@@ -370,9 +368,7 @@ def get_restock_forecast(current_user: str = Depends(get_current_user)):
                     **role, "days_remaining": 9999, "daily_cost": 0.0,
                     "status": "Insufficient Data", "confidence": "N/A",
                     "stock_on_hand": valid_stock, "history": history_points,
-                    "target_deal_price": 0.0, "ema_unit_cost": 0.0,
-                    "daily_usage_rate": None,
-                    "last_event_date": history_points[-1]['date'] if history_points else role['start_date']
+                    "target_deal_price": 0.0, "ema_unit_cost": 0.0
                 })
 
         forecasts.sort(key=lambda x: x['days_remaining'])

@@ -35,14 +35,17 @@ const loading = ref(false);
 
 const emit = defineEmits(['login-success']);
 
+// 1. Add the dynamic Base URL here
+const BASE_URL = `http://${window.location.hostname}:8000`;
+
 const handleLogin = async () => {
   loading.value = true;
   error.value = '';
   
   try {
-    const response = await fetch('http://127.0.0.1:8000/login', {
+    // 2. Inject the Base URL into the fetch call
+    const response = await fetch(`${BASE_URL}/login`, {
       method: 'POST',
-      // FastAPI's OAuth2PasswordRequestForm expects form-urlencoded [cite: 2026-03-05]
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ 
         username: username.value, 
@@ -53,18 +56,14 @@ const handleLogin = async () => {
     const data = await response.json();
 
     if (response.ok) {
-      // Store the actual JWT token [cite: 2026-03-05]
       localStorage.setItem('token', data.access_token);
-      // Store the name you typed in (FastAPI won't return it by default) [cite: 2026-03-08]
       localStorage.setItem('username', username.value); 
       
       emit('login-success');
     } else {
-      // If it's still a 422, this will show the specific validation error [cite: 2026-03-08]
       error.value = data.detail || 'Login failed';
     }
   } catch (err) {
-    // Log the actual error to console so you can see if it's CORS or code [cite: 2026-03-08]
     console.error("Login error:", err);
     error.value = 'Could not connect to server';
   } finally {

@@ -1,3 +1,6 @@
+// Automatically grabs the current IP of your NAS from your browser's address bar
+const BASE_URL = `http://${window.location.hostname}:8000`;
+
 // This is your global helper for all backend calls [cite: 2026-03-05]
 export async function authorizedFetch(endpoint, options = {}) {
   const token = localStorage.getItem('token'); // Grab the passport from storage [cite: 2026-03-05]

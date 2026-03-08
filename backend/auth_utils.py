@@ -6,13 +6,16 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from pathlib import Path
 
+current_dir = Path(__file__).parent
+
+env_path = current_dir / ".env"
 load_dotenv()
 
 # --- CONFIGURATION ---
 # The 'or ""' ensures Pylance sees this as a string, not 'str | None' [cite: 2026-03-08]
 SECRET_KEY: str = os.getenv("SECRET_KEY") or ""
-
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY not found in .env file!")
 
