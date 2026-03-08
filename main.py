@@ -190,30 +190,28 @@ def update_learned_habit(cursor, role_id):
         WHERE role_id = ?
     """, (new_buffer_rounded, new_penalty, role_id))
 
-@app.post("/login")
-def login(request: LoginRequest):
-    # Connect to the Master User list [cite: 2026-03-05]
-    conn = sqlite3.connect("users.db")
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+from fastapi.security import OAuth2PasswordRequestForm
 
-    # 2. Look for the user [cite: 2026-03-05]
-    cursor.execute("SELECT * FROM users WHERE username = ?", (request.username,))
+@app.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    # Connect to the central registry [cite: 2026-03-05]
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    
+    # We search by 'username' using the data FastAPI extracted for us [cite: 2026-03-08]
+    cursor.execute("SELECT user_id, hashed_password FROM users WHERE username = ?", (form_data.username,))
     user = cursor.fetchone()
     conn.close()
 
-    # 3. Validation: If user doesn't exist OR password doesn't match the hash [cite: 2026-03-08]
-    if not user or not verify_password(request.password, user["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not user or not verify_password(form_data.password, user[1]):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
 
-    # 4. Success! Generate the 30-day "Passport" [cite: 2026-03-08]
-    # We store the user_id inside the passport so we know which file to open later. [cite: 2026-03-05]
-    access_token = create_access_token(data={"sub": user["user_id"]})
+    # The 'sub' (subject) should be the internal user_id (e.g., 'user_01') [cite: 2026-03-05]
+    access_token = create_access_token(data={"sub": user[0]})
     
     return {
         "access_token": access_token, 
-        "token_type": "bearer",
-        "username": user["username"]
+        "token_type": "bearer"
     }
 
 @app.patch("/auth/change-password")

@@ -38,10 +38,12 @@
 
 <script setup>
 import { ref, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import LoginView from './components/LoginView.vue'; // Ensure this path is correct [cite: 2026-03-08]
 
 const isAuthenticated = ref(false);
 const currentUser = ref('');
+const router = useRouter();
 
 // Check if a 30-day token exists in browser memory [cite: 2026-03-05, 2026-03-08]
 const checkAuth = () => {
@@ -60,7 +62,7 @@ const logout = () => {
     localStorage.clear(); // Wipe the 30-day session token [cite: 2026-03-05, 2026-03-08]
     isAuthenticated.value = false;
     currentUser.value = '';
-    // Optional: Redirect to the base path if using router [cite: 2026-03-05]
+    router.push('/'); // Optional: Redirect to the base path if using router [cite: 2026-03-05]
   }
 };
 
@@ -84,14 +86,14 @@ body { background-color: #1a1a1a; color: #eee; font-family: 'Inter', sans-serif;
 
 .action-icons { 
   position: absolute; top: 50%; right: 25px; transform: translateY(-50%); 
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 20px;
 }
 
 /* User & Logout Styling [cite: 2026-03-06] */
-.user-display { font-size: 0.8rem; color: #888; font-weight: bold; }
+.user-display { font-size: 1rem; color: #888; font-weight: bold; border-right: 1px solid #444; padding-right: 20px}
 .logout-btn { 
   background: none; border: none; cursor: pointer; font-size: 1.2rem; 
-  opacity: 0.6; transition: opacity 0.2s; padding: 0;
+  opacity: 0.6; transition: opacity 0.2s; padding: 0; display: flex; align-items: center; justify-content: center;
 }
 .logout-btn:hover { opacity: 1; }
 
