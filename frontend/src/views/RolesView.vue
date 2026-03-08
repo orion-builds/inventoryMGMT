@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { authorizedFetch } from '../api'
 
 const roles = ref([]); const products = ref([]); const history = ref([]); const categories = ref([])
+const forecasts = ref([])
 const loading = ref(true)
 
 // --- UI Toggles & Search ---
@@ -30,9 +31,10 @@ const fetchData = async () => {
   try {
     const [rRes, pRes, hRes, cRes] = await Promise.all([
       authorizedFetch('/roles/'), 
-      authorizedFetch('/products/'),
+      authorizedFetch('/products/with-stock'),
       authorizedFetch('/role-history/'), 
-      authorizedFetch('/categories/')
+      authorizedFetch('/categories/'),
+      authorizedFetch('/dashboard/forecast')
     ])
     
     // Check all responses [cite: 2026-03-08]
@@ -41,6 +43,7 @@ const fetchData = async () => {
       products.value = (await pRes.json()).inventory || []
       history.value = (await hRes.json()).role_history || []
       categories.value = (await cRes.json()).categories || []
+      forecasts.value = (await fRes.json()).forecast || []
       
       if (roles.value.length > 0) {
         const buffers = roles.value.map(r => r.target_buffer_days)
@@ -108,10 +111,49 @@ const handleMax = () => { if (maxBuffer.value < minBuffer.value) maxBuffer.value
 
 const routineStatus = computed(() => {
   return roles.value.map(role => {
-    const activeEntry = history.value.find(h => h.role_id === role.role_id && !h.end_date)
-    return { ...role, activeProduct: activeEntry || null }
+    const activeEntry = history.value.find(h => h.role_id == role.role_id && !h.end_date)
+    
+    let stock_remaining = 0;
+    let daily_usage_rate = null;
+    let last_event_date = activeEntry ? activeEntry.start_date : null;
+
+    if (activeEntry) {
+      // 1. Pull the TRUE physical stock from the updated products list
+      const productDef = products.value.find(p => p.product_id == activeEntry.product_id);
+      if (productDef && productDef.stock_on_hand !== undefined) {
+        stock_remaining = productDef.stock_on_hand;
+      }
+
+      // 2. Only pull the advanced math (usage rate/dates) from the forecast
+      const forecast = forecasts.value.find(f => f.role_id == role.role_id && f.product_id == activeEntry.product_id);
+      if (forecast) {
+        daily_usage_rate = forecast.daily_usage_rate;
+        last_event_date = forecast.last_event_date;
+      }
+    }
+    
+    return { 
+      ...role, 
+      activeProduct: activeEntry || null,
+      stock_remaining: Number(stock_remaining).toFixed(1), // Keeps it clean, e.g., 1.3
+      daily_usage_rate,
+      last_event_date
+    }
   })
 })
+
+// --- NEW HELPER FUNCTIONS ---
+const daysSince = (dateString) => {
+  if (!dateString) return 0;
+  const diffTime = Math.abs(new Date() - new Date(dateString));
+  return Math.floor(diffTime / (1000 * 60 * 60 * 24)); 
+};
+
+const calculateEstimatedUnits = (role) => {
+  if (role.stock_remaining === undefined || !role.daily_usage_rate) return role.stock_remaining;
+  const estimate = Number(role.stock_remaining) - (role.daily_usage_rate * daysSince(role.last_event_date));
+  return Math.max(0, estimate).toFixed(1);
+};
 
 const getSortValue = (obj, key) => {
   if (key === 'product_name') return obj.activeProduct ? `${obj.activeProduct.brand} ${obj.activeProduct.product_name}` : ''
@@ -201,6 +243,8 @@ onMounted(fetchData)
             <th @click="sortBy('category_name')" class="sortable col-cat">Category <span v-if="sortKey === 'category_name'">{{ sortAsc ? '▲' : '▼' }}</span></th>
             <th @click="sortBy('target_buffer_days')" class="sortable col-buffer">Buffer <span v-if="sortKey === 'target_buffer_days'">{{ sortAsc ? '▲' : '▼' }}</span></th>
             <th @click="sortBy('product_name')" class="sortable col-product">Current Product <span v-if="sortKey === 'product_name'">{{ sortAsc ? '▲' : '▼' }}</span></th>
+            <th @click="sortBy('stock_remaining')" class="sortable col-stock">Stock <span v-if="sortKey === 'stock_remaining'">{{ sortAsc ? '▲' : '▼' }}</span></th>
+            <th class="col-estimate">Estimate</th>
             <th @click="sortBy('start_date')" class="sortable col-date">Started <span v-if="sortKey === 'start_date'">{{ sortAsc ? '▲' : '▼' }}</span></th>
             <th class="col-actions"></th>
           </tr>
@@ -225,6 +269,22 @@ onMounted(fetchData)
                   <span class="prod-sub">{{ role.activeProduct.product_name }}</span>
                 </div>
                 <span v-else class="empty-text">Not Assigned</span>
+              </td>
+              <td class="mono-text">
+                <span v-if="role.activeProduct">{{ role.stock_remaining }}</span>
+                <span v-else class="empty-text">-</span>
+              </td>
+              
+              <td>
+                <span v-if="role.activeProduct">
+                  <span v-if="role.daily_usage_rate" class="estimate-units">
+                    ~{{ calculateEstimatedUnits(role) }} {{ role.unit }}
+                  </span>
+                  <span v-else class="estimate-days text-muted">
+                    {{ daysSince(role.last_event_date) }} days ago
+                  </span>
+                </span>
+                <span v-else class="empty-text">-</span>
               </td>
               <td class="date-text">{{ role.activeProduct?.start_date || '-' }}</td>
               <td class="actions-cell"><button class="btn-swap-mini" @click="openSwapModal(role)">Swap Product</button></td>
@@ -419,4 +479,24 @@ input, select { background: #222; border: 1px solid #333; color: #fff; padding: 
   width: 120px; 
   text-align: left !important; 
 }
+
+/* --- New Inventory List Styles --- */
+.col-stock { width: 100px; text-align: center !important; }
+.col-estimate { width: 140px; }
+
+.estimate-units { 
+  color: var(--primary-green, #42b883); 
+  font-weight: 600; 
+  font-size: 0.85rem;
+}
+
+.estimate-days { 
+  font-style: italic; 
+  font-size: 0.8rem; 
+}
+
+.text-muted { 
+  color: #666; 
+}
+
 </style>

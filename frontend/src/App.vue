@@ -7,8 +7,8 @@
         <nav class="main-nav">
           <router-link to="/">Dashboard</router-link> |
           <router-link to="/events">Events</router-link> |
+          <router-link to="/roles">Inventory</router-link> |
           <router-link to="/products">Products</router-link> |
-          <router-link to="/roles">Roles</router-link> |
           <router-link to="/categories">Categories</router-link>
         </nav>
 
