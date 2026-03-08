@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { authorizedFetch } from '../api'
 
 // --- Data State ---
 const products = ref([])
@@ -27,17 +28,23 @@ const unit = ref('ml')
 const fetchProducts = async () => {
   loading.value = true
   try {
-    const response = await fetch("http://127.0.0.1:8000/products/")
+    // No full URL needed, just the endpoint [cite: 2026-03-05]
+    const response = await authorizedFetch("/products/")
     const data = await response.json()
-    products.value = data.inventory
     
-    // Set dynamic slider bounds [cite: 2026-03-03]
+    // Adjust this line based on your backend return (usually just 'data' now) [cite: 2026-03-08]
+    products.value = Array.isArray(data) ? data : data.inventory
+    
     if (products.value.length > 0) {
       const sizes = products.value.map(p => p.amount)
       absMax.value = Math.max(...sizes)
       maxSize.value = absMax.value
     }
-  } catch (error) { console.error(error) } finally { loading.value = false }
+  } catch (error) { 
+    console.error(error) 
+  } finally { 
+    loading.value = false 
+  }
 }
 
 // Ensure knobs don't cross [cite: 2026-03-03]
@@ -85,17 +92,41 @@ const openEditModal = (product) => {
 }
 
 const saveProduct = async () => {
-  const payload = { brand: brand.value, name: name.value, amount: amount.value, unit_of_measure: unit.value }
-  const url = isEditing.value ? `http://127.0.0.1:8000/products/${currentProductId.value}` : 'http://127.0.0.1:8000/products/'
+  const payload = { 
+    brand: brand.value, 
+    name: name.value, 
+    amount: amount.value, 
+    unit_of_measure: unit.value 
+  }
+
+  // Use endpoint paths [cite: 2026-03-05]
+  const endpoint = isEditing.value 
+    ? `/products/${currentProductId.value}` 
+    : '/products/'
+
   try {
-    const res = await fetch(url, { method: isEditing.value ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    if (res.ok) { showModal.value = false; await fetchProducts() }
-  } catch (err) { console.error(err) }
+    const res = await authorizedFetch(endpoint, { 
+      method: isEditing.value ? 'PATCH' : 'POST', 
+      body: JSON.stringify(payload) // Headers are handled by api.js! [cite: 2026-03-05, 2026-03-08]
+    })
+    
+    if (res.ok) { 
+      showModal.value = false
+      await fetchProducts() 
+    }
+  } catch (err) { 
+    console.error(err) 
+  }
 }
 
 const deleteProduct = async (id) => {
   if (!confirm("Delete this product?")) return
-  try { if ((await fetch(`http://127.0.0.1:8000/products/${id}`, { method: 'DELETE' })).ok) await fetchProducts() } catch (err) { console.error(err) }
+  try { 
+    const res = await authorizedFetch(`/products/${id}`, { method: 'DELETE' })
+    if (res.ok) await fetchProducts() 
+  } catch (err) { 
+    console.error(err) 
+  }
 }
 
 const sortBy = (key) => {

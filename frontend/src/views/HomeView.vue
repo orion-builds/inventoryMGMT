@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { authorizedFetch } from '../api'
 
 const forecast = ref([])
 const summary = ref({ daily: 0, monthly: 0, yearly: 0 }) 
@@ -12,12 +13,16 @@ const isExpanded = ref(false)
 const fetchData = async () => {
   loading.value = true
   try {
-    const response = await fetch('http://127.0.0.1:8000/dashboard/forecast')
-    const data = await response.json()
-    forecast.value = data.forecast || []
-    summary.value = data.summary || { daily: 0, monthly: 0, yearly: 0 } 
+    // Call the relative endpoint using your helper [cite: 2026-03-05]
+    const response = await authorizedFetch('/dashboard/forecast')
+    
+    if (response.ok) {
+      const data = await response.json()
+      forecast.value = data.forecast || []
+      summary.value = data.summary || { daily: 0, monthly: 0, yearly: 0 }
+    }
   } catch (err) { 
-    console.error(err) 
+    console.error("Dashboard sync failed:", err) 
   } finally { 
     loading.value = false 
   }

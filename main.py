@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware # no colour for some reason
 from pydantic import BaseModel # comes with fastapi pip
 from typing import Optional
 import sqlite3
 import math
 import traceback
+from auth_utils import verify_password, create_access_token, get_current_user, get_password_hash
+from database import get_db_connection
 
 app = FastAPI()
 
@@ -83,6 +85,14 @@ class EventUpdate(BaseModel):
     new_event_date: Optional[str] = None
     quantity: Optional[float] = None
     cost_sgd: Optional[float] = None
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
 
 def get_ema_alpha(cursor, role_id, category_id):
     # 1. Check Role level
@@ -180,10 +190,61 @@ def update_learned_habit(cursor, role_id):
         WHERE role_id = ?
     """, (new_buffer_rounded, new_penalty, role_id))
 
-@app.get("/dashboard/forecast")
-def get_restock_forecast():
-    conn = sqlite3.connect("inventory.db")
+@app.post("/login")
+def login(request: LoginRequest):
+    # Connect to the Master User list [cite: 2026-03-05]
+    conn = sqlite3.connect("users.db")
     conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # 2. Look for the user [cite: 2026-03-05]
+    cursor.execute("SELECT * FROM users WHERE username = ?", (request.username,))
+    user = cursor.fetchone()
+    conn.close()
+
+    # 3. Validation: If user doesn't exist OR password doesn't match the hash [cite: 2026-03-08]
+    if not user or not verify_password(request.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # 4. Success! Generate the 30-day "Passport" [cite: 2026-03-08]
+    # We store the user_id inside the passport so we know which file to open later. [cite: 2026-03-05]
+    access_token = create_access_token(data={"sub": user["user_id"]})
+    
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "username": user["username"]
+    }
+
+@app.patch("/auth/change-password")
+def change_password(data: PasswordChange, current_user: str = Depends(get_current_user)):
+    # 1. Connect to the CENTRAL users database [cite: 2026-03-05]
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    
+    try:
+        # 2. Get the current hashed password for this user [cite: 2026-03-05]
+        cursor.execute("SELECT hashed_password FROM users WHERE user_id = ?", (current_user,))
+        row = cursor.fetchone()
+        
+        if not row or not verify_password(data.current_password, row[0]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+        # 3. Hash the new password [cite: 2026-03-08]
+        new_hash = get_password_hash(data.new_password)
+        
+        # 4. Update the registry [cite: 2026-03-05]
+        cursor.execute("UPDATE users SET hashed_password = ? WHERE user_id = ?", (new_hash, current_user))
+        conn.commit()
+        
+        return {"message": "Password updated successfully"}
+    
+    finally:
+        conn.close()
+
+@app.get("/dashboard/forecast")
+def get_restock_forecast(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -325,12 +386,9 @@ def get_restock_forecast():
         conn.close()
 
 @app.get("/products/")
-def get_products():
+def get_products(current_user: str = Depends(get_current_user)):
     # Connect to the brain
-    conn = sqlite3.connect("inventory.db")
-    
-    # This magic line tells SQLite to return data as dictionaries instead of raw tuples
-    conn.row_factory = sqlite3.Row 
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -352,9 +410,9 @@ def get_products():
     return {"inventory": products}
 
 @app.post("/products/")
-def create_product(product: ProductCreate):
+def create_product(product: ProductCreate, current_user: str = Depends(get_current_user)):
     # Connect to our local brain
-    conn = sqlite3.connect("inventory.db")
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -381,10 +439,9 @@ def create_product(product: ProductCreate):
     return {"message": "Product added successfully", "product_id": new_id}
 
 @app.patch("/products/{product_id}")
-def update_product(product_id: int, product_data: ProductUpdate):
-    conn = sqlite3.connect("inventory.db")
+def update_product(product_id: int, product_data: ProductUpdate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;") # Maintain integrity
     
     try:
         # Dynamically build the SQL update statement
@@ -410,12 +467,12 @@ def update_product(product_id: int, product_data: ProductUpdate):
         conn.close()
 
 @app.delete("/products/{product_id}")
-def delete_product(product_id: int):
-    conn = sqlite3.connect("inventory.db")
+def delete_product(product_id: int, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     # We turn on Foreign Keys to ensure we don't break database integrity
-    cursor.execute("PRAGMA foreign_keys = ON;")
+    
     
     try:
         # Check if product exists first for a better error message
@@ -443,10 +500,10 @@ def delete_product(product_id: int):
     return {"message": f"Successfully deleted product {product_id}"}
 
 @app.get("/products/with-stock")
-def get_products_with_stock():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_products_with_stock(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
+
     try:
         # Calculates real-time stock explicitly for form validation UI
         cursor.execute("""
@@ -461,9 +518,8 @@ def get_products_with_stock():
         conn.close()
 
 @app.get("/events/")
-def get_events():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_events(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -488,9 +544,8 @@ def get_events():
         conn.close()
 
 @app.post("/events/")
-def log_event(event: InventoryEventCreate):
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row 
+def log_event(event: InventoryEventCreate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -532,22 +587,21 @@ def log_event(event: InventoryEventCreate):
         return {"message": "Success"}
 
     except Exception as e:
-        # --- THIS IS THE KEY: Print the exact line number and error to terminal ---
         error_trace = traceback.format_exc()
         print("❌ CRITICAL ERROR IN LOG_EVENT:")
-        print(error_trace)
+        print(error_trace) # This goes to your terminal [cite: 2026-03-08]
         
-        # Send the actual error back to the frontend so you can read it
-        raise HTTPException(status_code=500, detail=f"Internal Crash: {str(e)}")
+        # Send a helpful message but keep the raw SQL errors hidden from the UI [cite: 2026-03-08]
+        raise HTTPException(status_code=500, detail="Could not log event. Check terminal for details.")
     
     finally:
         conn.close()
 
 @app.patch("/events/")
-def update_event(product_id: int, event_type: str, event_date: str, event_data: EventUpdate):
-    conn = sqlite3.connect("inventory.db")
+def update_event(product_id: int, event_type: str, event_date: str, event_data: EventUpdate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;") 
+     
     
     try:
         # 1. Build dynamic update fields
@@ -599,8 +653,8 @@ def update_event(product_id: int, event_type: str, event_date: str, event_data: 
         conn.close()
 
 @app.delete("/events/")
-def delete_event(product_id: int, event_type: str, event_date: str):
-    conn = sqlite3.connect("inventory.db")
+def delete_event(product_id: int, event_type: str, event_date: str, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -622,9 +676,8 @@ def delete_event(product_id: int, event_type: str, event_date: str):
         conn.close()
 
 @app.get("/inventory/")
-def get_active_inventory():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_active_inventory(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -657,9 +710,8 @@ def get_active_inventory():
     return {"active_inventory": active_items}
 
 @app.get("/inventory/{product_id}")
-def get_current_stock(product_id: int):
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_current_stock(product_id: int, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -686,9 +738,8 @@ def get_current_stock(product_id: int):
     }
 
 @app.get("/categories/")
-def get_categories():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row 
+def get_categories(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -703,8 +754,8 @@ def get_categories():
     return {"categories": categories}
 
 @app.post("/categories/")
-def create_category(category: CategoryCreate):
-    conn = sqlite3.connect("inventory.db")
+def create_category(category: CategoryCreate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -725,8 +776,8 @@ def create_category(category: CategoryCreate):
     return {"message": "Category added successfully", "category_id": new_id}
 
 @app.patch("/categories/{category_id}")
-def update_category(category_id: int, category_data: CategoryUpdate):
-    conn = sqlite3.connect("inventory.db")
+def update_category(category_id: int, category_data: CategoryUpdate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     try:
         # Logic to update only the fields provided in the request body
@@ -756,10 +807,10 @@ def update_category(category_id: int, category_data: CategoryUpdate):
         conn.close()
 
 @app.delete("/categories/{category_id}")
-def delete_category(category_id: int):
-    conn = sqlite3.connect("inventory.db")
+def delete_category(category_id: int, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;") 
+     
     
     try:
         cursor.execute("DELETE FROM CATEGORY WHERE category_id = ?", (category_id,))
@@ -773,10 +824,10 @@ def delete_category(category_id: int):
         conn.close()
 
 @app.get("/roles/")
-def get_roles():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_roles(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
+
     try:
         # Fetch ema_alpha so the UI can display current overrides
         cursor.execute("""
@@ -792,10 +843,10 @@ def get_roles():
         conn.close()
 
 @app.post("/roles/")
-def create_role(role: RoleCreate):
-    conn = sqlite3.connect("inventory.db")
+def create_role(role: RoleCreate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;")
+    
     
     try:
         # Include holding_penalty in the insertion
@@ -817,10 +868,10 @@ def create_role(role: RoleCreate):
     return {"message": "Role added successfully", "role_id": new_id}
 
 @app.patch("/roles/{role_id}")
-def update_role(role_id: int, role_data: RoleUpdate):
-    conn = sqlite3.connect("inventory.db")
+def update_role(role_id: int, role_data: RoleUpdate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;")
+    
     
     try:
         update_fields = []
@@ -861,11 +912,10 @@ def update_role(role_id: int, role_data: RoleUpdate):
         conn.close()
 
 @app.delete("/roles/{role_id}")
-def delete_role(role_id: int):
-    conn = sqlite3.connect("inventory.db")
+def delete_role(role_id: int, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
-    # Critical for enforcing the "Safety Lock"
-    cursor.execute("PRAGMA foreign_keys = ON;")
+    
     
     try:
         cursor.execute("DELETE FROM ROLE WHERE role_id = ?", (role_id,))
@@ -887,9 +937,8 @@ def delete_role(role_id: int):
         conn.close()
 
 @app.get("/role-history/")
-def get_role_history():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_role_history(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     try:
@@ -908,12 +957,12 @@ def get_role_history():
         conn.close()
 
 @app.post("/role-history/")
-def create_role_history(history: RoleHistoryCreate):
-    conn = sqlite3.connect("inventory.db")
+def create_role_history(history: RoleHistoryCreate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     # Enforce foreign key constraints
-    cursor.execute("PRAGMA foreign_keys = ON;")
+    
     
     try:
         # 1. AUTO-TERMINATE: Update the previous active product for this role
@@ -941,9 +990,10 @@ def create_role_history(history: RoleHistoryCreate):
         conn.close()
 
 @app.patch("/role-history/")
-def update_role_history(role_id: int, product_id: int, start_date: str, update: RoleHistoryUpdate):
-    conn = sqlite3.connect("inventory.db")
+def update_role_history(role_id: int, product_id: int, start_date: str, update: RoleHistoryUpdate, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
+
     try:
         # We use the original 'start_date' from the URL to find the row,
         # then update it with the new values from the body.
@@ -959,9 +1009,10 @@ def update_role_history(role_id: int, product_id: int, start_date: str, update: 
         conn.close()
 
 @app.delete("/role-history/")
-def delete_role_history(role_id: int, product_id: int, start_date: str):
-    conn = sqlite3.connect("inventory.db")
+def delete_role_history(role_id: int, product_id: int, start_date: str, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
+
     try:
         cursor.execute("""
             DELETE FROM ROLE_HISTORY 
@@ -973,9 +1024,8 @@ def delete_role_history(role_id: int, product_id: int, start_date: str):
         conn.close()
 
 @app.get("/settings/")
-def get_settings():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def get_settings(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM SETTINGS")
     # Convert list of rows to a simple key-value dictionary
@@ -984,8 +1034,8 @@ def get_settings():
     return settings
 
 @app.patch("/settings/{key}")
-def update_setting(key: str, value: str):
-    conn = sqlite3.connect("inventory.db")
+def update_setting(key: str, value: str, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     cursor.execute("UPDATE SETTINGS SET value = ? WHERE key = ?", (value, key))
     if cursor.rowcount == 0:
@@ -996,9 +1046,8 @@ def update_setting(key: str, value: str):
     return {"message": f"Setting '{key}' updated successfully"}
 
 @app.get("/export-data")
-def export_data():
-    conn = sqlite3.connect("inventory.db")
-    conn.row_factory = sqlite3.Row
+def export_data(current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     
     tables = ["CATEGORY", "PRODUCT", "ROLE", "ROLE_HISTORY", "INVENTORY_EVENT", "SETTINGS"]
@@ -1013,8 +1062,8 @@ def export_data():
     return dump
 
 @app.post("/import-data")
-async def import_data(data: dict):
-    conn = sqlite3.connect("inventory.db")
+async def import_data(data: dict, current_user: str = Depends(get_current_user)):
+    conn = get_db_connection(current_user)
     cursor = conn.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys = OFF;")
@@ -1024,7 +1073,7 @@ async def import_data(data: dict):
             columns = rows[0].keys()
             query = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(columns))})"
             cursor.executemany(query, [tuple(row.values()) for row in rows])
-        cursor.execute("PRAGMA foreign_keys = ON;")
+        
         conn.commit()
         return {"message": "Import Successful"}
     except Exception as e:

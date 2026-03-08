@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { authorizedFetch } from '../api'
 
 const roles = ref([]); const products = ref([]); const history = ref([]); const categories = ref([])
 const loading = ref(true)
@@ -28,19 +29,29 @@ const fetchData = async () => {
   loading.value = true
   try {
     const [rRes, pRes, hRes, cRes] = await Promise.all([
-      fetch('http://127.0.0.1:8000/roles/'), fetch('http://127.0.0.1:8000/products/'),
-      fetch('http://127.0.0.1:8000/role-history/'), fetch('http://127.0.0.1:8000/categories/')
+      authorizedFetch('/roles/'), 
+      authorizedFetch('/products/'),
+      authorizedFetch('/role-history/'), 
+      authorizedFetch('/categories/')
     ])
-    roles.value = (await rRes.json()).roles || []
-    products.value = (await pRes.json()).inventory || []
-    history.value = (await hRes.json()).role_history || []
-    categories.value = (await cRes.json()).categories || []
     
-    if (roles.value.length > 0) {
-      const buffers = roles.value.map(r => r.target_buffer_days)
-      absMaxBuffer.value = Math.max(...buffers, 30); maxBuffer.value = absMaxBuffer.value
+    // Check all responses [cite: 2026-03-08]
+    if (rRes.ok && pRes.ok && hRes.ok && cRes.ok) {
+      roles.value = (await rRes.json()).roles || []
+      products.value = (await pRes.json()).inventory || []
+      history.value = (await hRes.json()).role_history || []
+      categories.value = (await cRes.json()).categories || []
+      
+      if (roles.value.length > 0) {
+        const buffers = roles.value.map(r => r.target_buffer_days)
+        absMaxBuffer.value = Math.max(...buffers, 30); maxBuffer.value = absMaxBuffer.value
+      }
     }
-  } catch (err) { console.error(err) } finally { loading.value = false }
+  } catch (err) { 
+    console.error("Failed to load roles:", err) 
+  } finally { 
+    loading.value = false 
+  }
 }
 
 const openCreateRole = () => {

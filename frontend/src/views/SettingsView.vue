@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { authorizedFetch } from '../api'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
@@ -17,25 +18,30 @@ const simWTP = computed(() => {
 
 const fetchSettings = async () => {
   try {
-    const res = await fetch('http://127.0.0.1:8000/settings/')
+    const res = await authorizedFetch('/settings/') // Relative path with token [cite: 2026-03-05]
     const data = await res.json()
     if (data.global_ema_alpha) globalAlpha.value = parseFloat(data.global_ema_alpha)
     if (data.default_holding_penalty) defaultH.value = parseFloat(data.default_holding_penalty)
-  } catch (err) { console.error(err) }
+  } catch (err) { 
+    console.error("Failed to load user settings:", err) 
+  }
 }
 
 const saveSettings = async (key, value) => {
   saving.value = true
   try {
-    await fetch(`http://127.0.0.1:8000/settings/${key}?value=${value}`, { method: 'PATCH' })
+    // Backend will update ONLY the logged-in user's database [cite: 2026-03-05, 2026-03-08]
+    await authorizedFetch(`/settings/${key}?value=${value}`, { method: 'PATCH' })
     message.value = "Settings updated!"
     setTimeout(() => message.value = '', 3000)
-  } finally { saving.value = false }
+  } finally { 
+    saving.value = false 
+  }
 }
 
 const exportData = async () => {
   try {
-    const res = await fetch('http://127.0.0.1:8000/export-data')
+    const res = await authorizedFetch('/export-data') // Export ONLY this user's data [cite: 2026-03-05]
     const data = await res.json()
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = window.URL.createObjectURL(blob)
@@ -43,25 +49,28 @@ const exportData = async () => {
     a.href = url
     a.download = `inventory_backup_${new Date().toISOString().split('T')[0]}.json`
     a.click()
-  } catch (err) { alert("Export failed") }
+  } catch (err) { 
+    alert("Export failed") 
+  }
 }
 
 const handleImport = async (event) => {
   const file = event.target.files[0]
-  if (!file || !confirm("⚠️ WARNING: This will permanently WIPE your current database and replace it with the backup file. This action cannot be undone. Do you wish to proceed?")) return
+  if (!file || !confirm("⚠️ WARNING: This will permanently WIPE YOUR CURRENT DATABASE and replace it with the backup file. Do you wish to proceed?")) return
   
   const reader = new FileReader()
   reader.onload = async (e) => {
     try {
       const data = JSON.parse(e.target.result)
-      const res = await fetch('http://127.0.0.1:8000/import-data', {
+      const res = await authorizedFetch('/import-data', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(data) // Headers are handled by api.js [cite: 2026-03-08]
       })
-      if (res.ok) alert("Import Successful! Refreshing...")
+      if (res.ok) alert("Import Successful! Your personal database has been updated.")
       window.location.reload()
-    } catch (err) { alert("Import failed: Check file format") }
+    } catch (err) { 
+      alert("Import failed: Check file format") 
+    }
   }
   reader.readAsText(file)
 }
@@ -98,6 +107,52 @@ const wtpFormula = computed(() => {
     { throwOnError: false, displayMode: true }
   )
 })
+// --- Security State ---
+const currentPassword = ref('')
+const newPassword = ref('')
+const repeatPassword = ref('')
+const passwordMessage = ref('')
+
+// --- Password Visibility State ---
+const showPasswords = ref(false)
+
+// Basic validation [cite: 2026-03-08]
+const isPasswordFormValid = computed(() => {
+  return currentPassword.value.length > 0 && 
+         newPassword.value.length >= 4 && 
+         newPassword.value === repeatPassword.value
+})
+
+const handleChangePassword = async () => {
+  if (newPassword.value !== repeatPassword.value) {
+    passwordMessage.value = "Error: New passwords do not match."
+    return
+  }
+
+  try {
+    const res = await authorizedFetch('/auth/change-password', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        current_password: currentPassword.value,
+        new_password: newPassword.value
+      })
+    })
+
+    if (res.ok) {
+      passwordMessage.value = "✅ Success: Password updated!"
+      // Reset fields [cite: 2026-03-08]
+      currentPassword.value = ''
+      newPassword.value = ''
+      repeatPassword.value = ''
+      setTimeout(() => passwordMessage.value = '', 5000)
+    } else {
+      const errorData = await res.json()
+      passwordMessage.value = `❌ ${errorData.detail || 'Update failed'}`
+    }
+  } catch (err) {
+    passwordMessage.value = "❌ Server connection error."
+  }
+}
 
 onMounted(fetchSettings)
 </script>
@@ -117,6 +172,46 @@ onMounted(fetchSettings)
             <input type="file" @change="handleImport" accept=".json" hidden />
           </label>
           <span class="tooltip-text">⚠️ Warning: This will wipe the current database!</span>
+        </div>
+      </div>
+    </section>
+    <h2>Security</h2>
+    <section class="settings-card">
+      <h3>Change Password</h3>
+      <p class="explanation">Update your login credentials. We recommend at least 8 characters.</p>
+      
+      <div class="password-form">
+        <div class="form-row">
+          <div class="input-group">
+            <label class="tiny-label">Current Password</label>
+            <input :type="showPasswords ? 'text' : 'password'" v-model="currentPassword" class="settings-input" placeholder="••••••••" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="input-group">
+            <label class="tiny-label">New Password</label>
+            <input :type="showPasswords ? 'text' : 'password'" v-model="newPassword" class="settings-input" placeholder="••••••••" />
+          </div>
+          <div class="input-group">
+            <label class="tiny-label">Repeat New Password</label>
+            <input :type="showPasswords ? 'text' : 'password'" v-model="repeatPassword" class="settings-input" placeholder="••••••••" />
+          </div>
+        </div>
+
+        <p v-if="passwordMessage" :class="['status-msg', passwordMessage.includes('Success') ? 'text-success' : 'text-error']" style="margin-bottom: -0.5rem;">
+          {{ passwordMessage }}
+        </p>
+
+        <div class="action-footer-between">
+          <label class="show-pass-label">
+            <input type="checkbox" v-model="showPasswords" />
+            <span>Show passwords</span>
+          </label>
+
+          <button @click="handleChangePassword" class="btn-apply-block" :disabled="!isPasswordFormValid">
+            Update Password
+          </button>
         </div>
       </div>
     </section>
@@ -581,6 +676,99 @@ h2 {
   font-size: 1.2rem;
   color: var(--primary-green);
   font-weight: 900;
+}
+
+/* Container for the specific password form logic */
+.password-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1rem;
+  max-width: 100%; /* Keeps the form from stretching too wide [cite: 2026-03-08] */
+}
+
+/* Rows for inputs to sit side-by-side or stacked [cite: 2026-03-08] */
+.form-row {
+  display: flex;
+  gap: 1.2rem;
+  flex-wrap: wrap; /* Allows stacking on smaller mobile screens [cite: 2026-03-08] */
+}
+
+/* Individual input containers */
+.input-group {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Standardized settings inputs [cite: 2026-03-08] */
+.settings-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 0.8rem;
+  color: #fff;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent-color, #42b883); /* Vue Green or your accent [cite: 2026-03-08] */
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Action area at the bottom of the card [cite: 2026-03-08] */
+.action-footer-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Status message colors [cite: 2026-03-08] */
+.text-success { color: #4ade80; font-size: 0.9rem; font-weight: 500; }
+.text-error { color: #f87171; font-size: 0.9rem; font-weight: 500; }
+
+/* Disabled state for the update button [cite: 2026-03-08] */
+.btn-apply-block:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+/* Layout for the checkbox label [cite: 2026-03-08] */
+.show-pass-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.show-pass-label:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* Customizing the checkbox appearance slightly [cite: 2026-03-08] */
+.show-pass-label input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent-color, #42b883); /* Matches your UI theme */
+  width: 16px;
+  height: 16px;
+}
+
+.status-msg {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
 }
 
 </style>

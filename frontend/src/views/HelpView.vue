@@ -1,5 +1,7 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { authorizedFetch } from '../api'
+
 
 // --- 1. EMA Simulator State ---
 const emaOldPrice = ref(20.00)
@@ -21,6 +23,25 @@ const wtpSimulated = computed(() => {
   if (wtpExcessDays.value === 0) return wtpBasePrice.value
   return wtpBasePrice.value * Math.pow((1 - wtpPenalty.value), wtpExcessDays.value)
 })
+
+// --- NEW: Fetch actual user settings [cite: 2026-03-05, 2026-03-08] ---
+const loadUserSettings = async () => {
+  try {
+    const response = await authorizedFetch('/settings/')
+    if (response.ok) {
+      const settings = await response.json()
+      // If the user has a custom alpha in their DB, use it here [cite: 2026-03-08]
+      if (settings.global_ema_alpha) {
+        emaAlpha.value = parseFloat(settings.global_ema_alpha)
+      }
+      if (settings.global_holding_penalty) {
+        wtpPenalty.value = parseFloat(settings.global_holding_penalty)
+      }
+    }
+  } catch (err) {
+    console.error("Could not sync simulator with user settings:", err)
+  }
+}
 
 // --- 3. Margin of Error Simulator State ---
 const marginDaysRemaining = ref(100)
@@ -45,6 +66,9 @@ const marginSimulated = computed(() => {
   
   return { days, conf, color }
 })
+
+onMounted(loadUserSettings)
+
 </script>
 
 <template>

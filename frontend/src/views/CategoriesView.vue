@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { authorizedFetch } from '../api'
 
 const categories = ref([])
 const loading = ref(true)
@@ -20,10 +21,14 @@ const categoryAlpha = ref(null)
 const fetchCategories = async () => {
   loading.value = true
   try {
-    const response = await fetch("http://127.0.0.1:8000/categories/")
+    const response = await authorizedFetch("/categories/") // Relative path [cite: 2026-03-05]
     const data = await response.json()
     categories.value = data.categories || []
-  } catch (err) { console.error(err) } finally { loading.value = false }
+  } catch (err) { 
+    console.error(err) 
+  } finally { 
+    loading.value = false 
+  }
 }
 
 // --- Sorting & Filtering Logic [cite: 2026-03-03] ---
@@ -59,21 +64,44 @@ const openEditModal = (cat) => {
 
 const saveCategory = async () => {
   if (!categoryName.value) return alert("Name is required.")
-  const url = isEditing.value ? `http://127.0.0.1:8000/categories/${currentCategoryId.value}` : 'http://127.0.0.1:8000/categories/'
-  const payload = { name: categoryName.value, ema_alpha: categoryAlpha.value === "" ? null : categoryAlpha.value }
+  
+  const endpoint = isEditing.value 
+    ? `/categories/${currentCategoryId.value}` 
+    : '/categories/'
+    
+  const payload = { 
+    name: categoryName.value, 
+    ema_alpha: categoryAlpha.value === "" ? null : categoryAlpha.value 
+  }
+
   try {
-    const res = await fetch(url, { method: isEditing.value ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    if (res.ok) { showModal.value = false; await fetchCategories() }
-  } catch (err) { console.error(err) }
+    const res = await authorizedFetch(endpoint, { 
+      method: isEditing.value ? 'PATCH' : 'POST', 
+      body: JSON.stringify(payload) 
+    })
+    
+    if (res.ok) { 
+      showModal.value = false
+      await fetchCategories() 
+    }
+  } catch (err) { 
+    console.error(err) 
+  }
 }
 
 const deleteCategory = async (id) => {
   if (!confirm("Delete category? (Fails if roles are linked)")) return
   try {
-    const res = await fetch(`http://127.0.0.1:8000/categories/${id}`, { method: 'DELETE' })
-    if (res.ok) await fetchCategories()
-    else alert((await res.json()).detail)
-  } catch (err) { console.error(err) }
+    const res = await authorizedFetch(`/categories/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      await fetchCategories()
+    } else {
+      const errorData = await res.json()
+      alert(errorData.detail)
+    }
+  } catch (err) { 
+    console.error(err) 
+  }
 }
 
 onMounted(fetchCategories)

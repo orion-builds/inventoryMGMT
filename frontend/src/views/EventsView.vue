@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { authorizedFetch } from '../api'
 
 // --- Data State ---
 const events = ref([])
@@ -34,12 +35,20 @@ const fetchData = async () => {
   loading.value = true
   try {
     const [evRes, prodRes] = await Promise.all([
-      fetch('http://127.0.0.1:8000/events/'),
-      fetch('http://127.0.0.1:8000/products/with-stock')
+      authorizedFetch('/events/'),
+      authorizedFetch('/products/with-stock')
     ])
-    events.value = (await evRes.json()).events || []
-    products.value = (await prodRes.json()).inventory || []
-  } catch (error) { console.error("Fetch failed:", error) } finally { loading.value = false }
+    
+    // Check for success before parsing [cite: 2026-03-08]
+    if (evRes.ok && prodRes.ok) {
+      events.value = (await evRes.json()).events || []
+      products.value = (await prodRes.json()).inventory || []
+    }
+  } catch (error) { 
+    console.error("Fetch failed:", error) 
+  } finally { 
+    loading.value = false 
+  }
 }
 
 const filteredEvents = computed(() => {
@@ -102,7 +111,7 @@ const openEditModal = (event) => {
 const saveEvent = async () => {
   if (!selectedProduct.value) return alert("Please select a product.")
   
-  // RULE: Only one Init entry allowed per product [cite: 2026-03-03]
+  // Existing validation logic... [cite: 2026-03-03]
   if (type.value === 'Init' && !isEditing.value) {
     const hasInit = events.value.some(e => e.product_id === selectedProduct.value.product_id && e.event_type === 'Init')
     if (hasInit) return alert("An initialization entry already exists for this product.")
@@ -113,20 +122,19 @@ const saveEvent = async () => {
     ? { new_event_type: type.value, new_event_date: eventDate.value, quantity: qty.value, cost_sgd: costValue }
     : { product_id: selectedProduct.value.product_id, event_type: type.value, event_date: eventDate.value, quantity: qty.value, cost_sgd: costValue }
 
-  let url = 'http://127.0.0.1:8000/events/'
+  let endpoint = '/events/' // Use relative path [cite: 2026-03-05]
   if (isEditing.value) {
     const queryParams = new URLSearchParams({
       product_id: originalEvent.value.product_id,
       event_type: originalEvent.value.event_type,
       event_date: originalEvent.value.event_date
     })
-    url += `?${queryParams.toString()}`
+    endpoint += `?${queryParams.toString()}`
   }
 
   try {
-    const res = await fetch(url, {
+    const res = await authorizedFetch(endpoint, {
       method: isEditing.value ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
     if (res.ok) { showAddForm.value = false; await fetchData() }
@@ -135,9 +143,19 @@ const saveEvent = async () => {
 
 const deleteEvent = async (e) => {
   if (!confirm("Delete this log entry?")) return
-  const queryParams = new URLSearchParams({ product_id: e.product_id, event_type: e.event_type, event_date: e.event_date })
-  const url = `http://127.0.0.1:8000/events/?${queryParams.toString()}`
-  try { if ((await fetch(url, { method: 'DELETE' })).ok) await fetchData() } catch (err) { console.error("Delete failed:", err) }
+  const queryParams = new URLSearchParams({ 
+    product_id: e.product_id, 
+    event_type: e.event_type, 
+    event_date: e.event_date 
+  })
+  const endpoint = `/events/?${queryParams.toString()}`
+  
+  try { 
+    const res = await authorizedFetch(endpoint, { method: 'DELETE' })
+    if (res.ok) await fetchData() 
+  } catch (err) { 
+    console.error("Delete failed:", err) 
+  }
 }
 
 const isStockAvailable = computed(() => {
